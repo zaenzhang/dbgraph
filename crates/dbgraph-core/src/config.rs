@@ -273,9 +273,9 @@ impl DbGraphConfig {
             ));
         }
 
-        if self.database.connection_env.is_none() && self.database.connection_string.is_some() {
+        if self.database.connection_env.is_none() && self.database.connection_string.is_none() {
             return Err(DbGraphError::invalid_config(
-                "database.connectionEnv is required when database.connectionString is set; prefer environment variables over plaintext connection strings",
+                "database.connectionEnv or database.connectionString must be set; prefer environment variables over plaintext connection strings",
             ));
         }
 
@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_plaintext_connection_without_env_reference() {
+    fn allows_explicit_plaintext_connection_without_env_reference() {
         let config = DbGraphConfig {
             database: DatabaseConfig {
                 provider: "postgres".to_owned(),
@@ -374,11 +374,27 @@ mod tests {
             ..DbGraphConfig::default()
         };
 
+        config
+            .validate()
+            .expect("explicit plaintext config should validate");
+    }
+
+    #[test]
+    fn rejects_config_without_connection_source() {
+        let config = DbGraphConfig {
+            database: DatabaseConfig {
+                provider: "postgres".to_owned(),
+                connection_env: None,
+                connection_string: None,
+            },
+            ..DbGraphConfig::default()
+        };
+
         let err = config
             .validate()
-            .expect_err("plaintext-only config should fail");
+            .expect_err("missing connection source should fail");
 
-        assert!(err.to_string().contains("connectionEnv is required"));
+        assert!(err.to_string().contains("connectionEnv"));
     }
 
     #[test]

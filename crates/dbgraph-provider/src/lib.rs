@@ -1,20 +1,10 @@
-//! Database provider abstractions for `DbGraph`.
-//!
-//! Provider traits and concrete database integrations are introduced in later
-//! tasks. Target business databases must remain read-only by default.
+//! Database provider abstractions and concrete database integrations.
 
-/// Describes the current implementation status of the provider crate.
-#[must_use]
-pub fn crate_status() -> &'static str {
-    "provider skeleton"
-}
+pub mod postgres;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn status_is_stable() {
-        assert_eq!(crate_status(), "provider skeleton");
-    }
-}
+pub use postgres::{
+    canonicalize_raw_snapshot, ConnectionInfo, DatabaseProvider, PostgresProvider,
+    ProviderConnectionConfig, ProviderRegistry, RawColumn, RawColumnStatistics, RawConstraint,
+    RawConstraintKind, RawEnum, RawIndex, RawRoutine, RawRoutineKind, RawSchema, RawSchemaSnapshot,
+    RawSequence, RawStatisticsSnapshot, RawTable, RawTableStatistics, RawTrigger, RawView,
+};

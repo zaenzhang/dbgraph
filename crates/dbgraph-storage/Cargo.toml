@@ -9,5 +9,10 @@ rust-version.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+dbgraph-core = { path = "../dbgraph-core" }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+serde_json = "1.0.145"
+
 [lints]
 workspace = true

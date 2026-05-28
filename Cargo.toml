@@ -3,7 +3,9 @@ members = [
     "crates/dbgraph-cli",
     "crates/dbgraph-core",
     "crates/dbgraph-storage",
+    "crates/dbgraph-graph",
     "crates/dbgraph-provider",
+    "crates/dbgraph-sql",
     "crates/dbgraph-mcp",
     "crates/dbgraph-installer",
 ]

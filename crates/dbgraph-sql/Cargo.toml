@@ -1,5 +1,5 @@
 [package]
-name = "dbgraph-core"
+name = "dbgraph-sql"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,12 +10,16 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+dbgraph-core = { path = "../dbgraph-core" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10.9"
-thiserror = "2.0.17"
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+sqlparser = "0.59.0"
+walkdir = "2.5.0"
+globset = "0.4.16"
+
+[dev-dependencies]
+tempfile = "3.23.0"
 
 [lints]
 workspace = true

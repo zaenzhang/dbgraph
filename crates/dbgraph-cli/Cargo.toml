@@ -12,6 +12,13 @@ path = "src/main.rs"
 
 [dependencies]
 dbgraph-core = { path = "../dbgraph-core" }
+dbgraph-agent-config = { package = "dbgraph-installer", path = "../dbgraph-installer" }
+dbgraph-graph = { path = "../dbgraph-graph" }
+dbgraph-provider = { path = "../dbgraph-provider" }
+dbgraph-sql = { path = "../dbgraph-sql" }
+dbgraph-storage = { path = "../dbgraph-storage" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
 tracing = "0.1.41"
 
 [lints]
