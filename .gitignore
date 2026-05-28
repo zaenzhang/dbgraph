@@ -1,0 +1,21 @@
+# Rust build output
+/target/
+
+# Local DbGraph project data
+/.dbgraph/
+
+# Reference and task-planning material
+/reference-codegraph/
+/dbgraph_task_pack/
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Logs and local environment files
+*.log
+.env
+.env.*
+!.env.example
