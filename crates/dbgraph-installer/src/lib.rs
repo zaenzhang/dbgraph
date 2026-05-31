@@ -592,13 +592,13 @@ mod tests {
         );
 
         for target in targets {
-            let artifact = target.artifact_name("0.1.1");
-            assert!(artifact.starts_with("dbgraph-v0.1.1-"));
+            let artifact = target.artifact_name("0.1.2");
+            assert!(artifact.starts_with("dbgraph-v0.1.2-"));
             assert!(artifact.contains(target.triple));
-            assert_eq!(target.checksum_name("0.1.1"), format!("{artifact}.sha256"));
+            assert_eq!(target.checksum_name("0.1.2"), format!("{artifact}.sha256"));
             assert_eq!(
-                target.download_url("https://github.com/zaenzhang/dbgraph", "0.1.1"),
-                format!("https://github.com/zaenzhang/dbgraph/releases/download/v0.1.1/{artifact}")
+                target.download_url("https://github.com/zaenzhang/dbgraph", "0.1.2"),
+                format!("https://github.com/zaenzhang/dbgraph/releases/download/v0.1.2/{artifact}")
             );
         }
     }
