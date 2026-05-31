@@ -48,6 +48,7 @@ Build a local graph of database schema objects, SQL artifacts, and relationships
 | Avoid unsafe exploratory SQL | Validates SQL references against the local graph without executing SQL. |
 | Understand change impact | Traverses explicit and inferred dependencies across tables, columns, views, and SQL artifacts. |
 | Review database risk | Reports security, quality, workload, and performance findings with evidence and suggested fixes. |
+| Go deeper only when allowed | Reads bounded row samples only from tables and columns explicitly listed in `dataAccess`. |
 | Integrate with agents | Exposes both CLI commands and MCP stdio tools. |
 
 ## Status
@@ -61,6 +62,7 @@ DbGraph currently supports:
 | SQL | SQL file scanning, parsing, fingerprinting, lineage extraction |
 | Graph | Local SQLite graph storage, object search, inferred relationships |
 | Analysis | SQL validation, diff, impact, context retrieval, structured analysis reports |
+| Data profiling | Allowlisted sample summaries for PostgreSQL and SQLite |
 | Agent interface | CLI plus MCP stdio server |
 
 ### Database Support
@@ -140,6 +142,7 @@ For a complete walkthrough, see [docs/usage.md](docs/usage.md) or [docs/usage.zh
 - Snapshot JSON is written under `.dbgraph/snapshots/`.
 - The local graph index is rebuilt into `.dbgraph/dbgraph.db`.
 - Sensitive connection strings are not printed in provider errors.
+- Business-row sampling is disabled unless sample profile mode and a matching `dataAccess` rule explicitly allow specific columns.
 
 ### SQL Artifacts
 
@@ -170,6 +173,7 @@ For a complete walkthrough, see [docs/usage.md](docs/usage.md) or [docs/usage.zh
 | Data Integrity & Schema Quality | Missing primary keys, probable missing foreign keys. |
 | SQL Workload & Safety | `UPDATE` or `DELETE` statements without `WHERE`. |
 | Performance | Filters or joins without supporting indexes. |
+| Data Profiling & Business Rules | Allowlisted sample signals such as enum-like values without constraints, high null rates, negative metric-like values, and unstable identifier formats. |
 
 Example:
 
@@ -187,6 +191,54 @@ dbgraph analyze --include-suppressed --suppressions .dbgraph/suppressions.json
 
 Suppressed findings are matched by `ruleId` and `object`, retained in `suppressedFindings`, and excluded from active `findings` by default.
 
+### Allowlisted Data Profiling
+
+DbGraph remains schema-only by default. `dataAccess` is the policy boundary for
+configuration-controlled database exposure:
+
+- `schemaOnly` keeps table names, columns, constraints, indexes, relations, SQL lineage, and safe profile metadata, but never reads business row values.
+- `stats` is reserved for provider/catalog statistics without row values.
+- `sample` reads bounded samples only for the explicitly listed columns on matching tables.
+- `context`, MCP tools, `analyze`, and `benchmark-agent` consume only the snapshot data produced under this policy; they do not bypass `dataAccess`.
+
+To let DbGraph inspect bounded business-row samples, opt into sample mode and list the exact columns:
+
+```json
+{
+  "snapshot": {
+    "profilingMode": "sample",
+    "maxRowsPerTable": 50,
+    "sampleRows": true
+  },
+  "dataAccess": {
+    "defaultMode": "schemaOnly",
+    "tables": [
+      {
+        "pattern": "public.orders",
+        "mode": "sample",
+        "columns": ["status", "created_at"],
+        "where": "created_at >= now() - interval '30 days'",
+        "limit": 50,
+        "storeRawValues": false
+      },
+      {
+        "pattern": "public.payments",
+        "mode": "schemaOnly"
+      }
+    ]
+  }
+}
+```
+
+Then run:
+
+```bash
+dbgraph snapshot --profile sample
+dbgraph analyze --format markdown
+```
+
+See [docs/configuration.md](docs/configuration.md) and [docs/security.md](docs/security.md) for the full policy.
+
 ### Agent Value Benchmark
 
 `benchmark-agent` estimates the context cost and evidence coverage difference between raw project materials and DbGraph structured context. It is offline and deterministic; it does not call an LLM.
@@ -199,10 +251,10 @@ Latest teashop smoke benchmark:
 
 | Metric | Baseline | DbGraph | Delta |
 | --- | ---: | ---: | ---: |
-| Estimated tokens | 67,326 | 6,324 | -90.6% |
+| Estimated tokens | 70,668 | 7,329 | -89.6% |
 | Retrieval steps | 12 | 12 | 0 |
 | Evidence recall | baseline | +0.17 | +0.17 |
-| Relevant object precision | baseline | +0.07 | +0.07 |
+| Relevant object precision | baseline | +0.06 | +0.06 |
 
 This is an offline context benchmark, not a live LLM billing measurement.
 
@@ -287,6 +339,7 @@ powershell -ExecutionPolicy Bypass -File scripts/integration/postgres-smoke.ps1
 | SQL validation | `dbgraph validate-sql` never executes SQL. |
 | Analysis | `dbgraph analyze` works from the local snapshot and graph index. |
 | Samples | Raw sample storage is off by default; sensitive samples are masked when sampling is explicitly enabled. |
+| Data access allowlist | No table is sampled unless `dataAccess` matches the table and names the columns. |
 | Secrets | Sensitive connection strings are not printed in provider errors. |
 | Internal storage | SQLite provider refuses to snapshot `.dbgraph/dbgraph.db`. |
 

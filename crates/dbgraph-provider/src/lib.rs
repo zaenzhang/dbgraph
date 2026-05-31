@@ -1,6 +1,7 @@
 //! Database provider abstractions and concrete database integrations.
 
 pub mod postgres;
+mod sampling_support;
 pub mod sqlite;
 pub mod unsupported;
 
@@ -35,10 +36,12 @@ mod tests {
                 CapabilityStatus::Unknown
             );
             assert_ne!(provider.capabilities().indexes, CapabilityStatus::Unknown);
-            assert_eq!(
-                provider.capabilities().sampling,
+            let expected_sampling = if matches!(id, "postgres" | "sqlite") {
+                CapabilityStatus::Supported
+            } else {
                 CapabilityStatus::Unsupported
-            );
+            };
+            assert_eq!(provider.capabilities().sampling, expected_sampling);
         }
     }
 
@@ -111,6 +114,79 @@ mod tests {
             .any(|profile| profile.object_id == "table:main.orders"
                 && profile.row_estimate == Some(2)
                 && profile.row_count_kind.as_deref() == Some("exact")));
+    }
+
+    #[test]
+    fn sqlite_samples_only_allowlisted_columns() {
+        use dbgraph_core::config::{DataAccessConfig, DataAccessMode, DataAccessTableRule};
+        use dbgraph_core::sampling::{SamplingOptions, SamplingStrategy};
+        use dbgraph_core::security::MaskingStrategy;
+
+        let temp = TempProject::new();
+        let db_path = temp.root.join("business.sqlite");
+        create_sqlite_fixture(&db_path);
+        let provider = ProviderRegistry
+            .get("sqlite")
+            .expect("sqlite provider should be registered");
+
+        let snapshot = provider
+            .snapshot_with_data_access(
+                &ProviderConnectionConfig::from_url(db_path.display().to_string()),
+                &DataAccessConfig {
+                    tables: vec![DataAccessTableRule {
+                        pattern: "main.orders".to_owned(),
+                        mode: DataAccessMode::Sample,
+                        columns: vec!["status".to_owned()],
+                        limit: Some(2),
+                        store_raw_values: true,
+                        ..DataAccessTableRule::default()
+                    }],
+                    ..DataAccessConfig::default()
+                },
+                &SamplingOptions {
+                    max_rows_per_table: 2,
+                    strategy: SamplingStrategy::Limit,
+                    statement_timeout_ms: Some(1_000),
+                    store_raw_samples: false,
+                    masking_strategy: MaskingStrategy::Redact,
+                },
+            )
+            .expect("sqlite sampling should run");
+
+        let status_profile = snapshot
+            .column_profiles
+            .iter()
+            .find(|profile| profile.object_id == "column:main.orders.status")
+            .expect("allowlisted status profile should exist");
+        assert!(status_profile.profile.contains_key("sampleSummary"));
+        assert!(!snapshot
+            .column_profiles
+            .iter()
+            .any(|profile| profile.object_id == "column:main.orders.user_id"
+                && profile.profile.contains_key("sampleSummary")));
+    }
+
+    #[test]
+    fn postgres_sample_query_quotes_columns_and_bounds_limit() {
+        use dbgraph_core::config::DataAccessTableRule;
+
+        let query = postgres::build_sample_query(
+            "public",
+            "orders",
+            &DataAccessTableRule {
+                columns: vec!["status".to_owned(), "total_amount".to_owned()],
+                where_clause: Some("created_at >= now() - interval '30 days'".to_owned()),
+                limit: Some(50),
+                ..DataAccessTableRule::default()
+            },
+            20,
+        )
+        .expect("sample query should build");
+
+        assert_eq!(
+            query,
+            "SELECT (\"status\")::text AS \"status\", (\"total_amount\")::text AS \"total_amount\" FROM \"public\".\"orders\" WHERE created_at >= now() - interval '30 days' LIMIT 20"
+        );
     }
 
     #[test]

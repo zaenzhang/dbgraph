@@ -95,6 +95,7 @@ DbGraph 从 `.dbgraph/dbgraph.config.json` 读取配置。
 - `snapshot`：JSON 输出、profile 深度和采样限制。
 - `security`：原始数据存储、采样 mask 和自定义敏感词。
 - `mcp`：MCP 开关和响应大小预算。
+- `dataAccess`：用于业务行采样的表/列显式 allowlist。
 
 ### PostgreSQL
 
@@ -151,9 +152,51 @@ Profile 模式：
 
 - `schema`：只采集 schema 元数据，默认且最安全。
 - `stats`：采集 provider/catalog 统计信息，例如行数估计。
-- `sample`：显式开启采样；默认仍会进行敏感信息 mask。
+- `sample`：允许采样，但只有匹配 `dataAccess` allowlist 的表和列才会读取行值；默认仍会进行敏感信息 mask。
 
 Snapshot 会写入 `.dbgraph/snapshots/`，本地图索引会重建到 `.dbgraph/dbgraph.db`。
+
+### 显式授权的数据 Profiling
+
+默认情况下，DbGraph 不读取业务行值。如果你希望基于少量样本做更深入的业务规则分析，需要同时开启 sample profile，并在 `dataAccess` 里指定具体表和列：
+
+这也是给 AI agent 做数据库暴露过滤的推荐方式：敏感或暂不需要深入分析的表保持 `schemaOnly`，只提供表结构、字段、约束、索引、关系和 SQL lineage；确实允许深入分析的表才设置为 `sample`，并且只能读取配置里列出的字段。后续 `context`、MCP 工具和 `analyze` 都只复用 snapshot 中已经授权生成的摘要，不会额外绕过配置去读取行数据。
+
+```json
+{
+  "snapshot": {
+    "profilingMode": "sample",
+    "maxRowsPerTable": 50,
+    "sampleRows": true
+  },
+  "dataAccess": {
+    "defaultMode": "schemaOnly",
+    "tables": [
+      {
+        "pattern": "public.orders",
+        "mode": "sample",
+        "columns": ["status", "created_at"],
+        "where": "created_at >= now() - interval '30 days'",
+        "limit": 50,
+        "storeRawValues": false
+      },
+      {
+        "pattern": "public.payments",
+        "mode": "schemaOnly"
+      }
+    ]
+  }
+}
+```
+
+然后运行：
+
+```powershell
+dbgraph snapshot --profile sample
+dbgraph analyze --format markdown
+```
+
+当授权样本显示出 enum-like 但缺少约束、高空值率、金额类负数异常或 ID/code/email 等格式不稳定时，`analyze` 会增加 `Data Profiling & Business Rules` 报告分区。
 
 ## SQL Artifact
 

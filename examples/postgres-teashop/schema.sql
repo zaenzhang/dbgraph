@@ -45,3 +45,24 @@ WHERE o.status IN ('pending', 'paid');
 
 COMMENT ON COLUMN customers.email IS 'customer email address';
 COMMENT ON COLUMN payments.provider_token IS 'payment provider token';
+
+INSERT INTO customers (email, display_name) VALUES
+  ('alice@example.test', 'Alice'),
+  ('bob@example.test', 'Bob');
+
+INSERT INTO products (sku, name, price_cents) VALUES
+  ('TEA-001', 'Green Tea', 1299),
+  ('TEA-002', 'Black Tea', 1499);
+
+INSERT INTO orders (customer_id, status, created_at) VALUES
+  (1, 'pending', now() - interval '3 days'),
+  (1, 'paid', now() - interval '2 days'),
+  (2, 'cancelled', now() - interval '1 day');
+
+INSERT INTO order_items (order_id, product_id, quantity) VALUES
+  (1, 1, 2),
+  (2, 2, 1),
+  (3, 1, 1);
+
+INSERT INTO payments (order_id, amount_cents, provider_token, status) VALUES
+  (2, 1499, 'tok_live_sensitive_123', 'captured');

@@ -39,6 +39,10 @@ DbGraph project state is local to the repository directory. The config controls 
   "mcp": {
     "enabled": true,
     "maxResponseChars": 15000
+  },
+  "dataAccess": {
+    "defaultMode": "schemaOnly",
+    "tables": []
   }
 }
 ```
@@ -88,7 +92,7 @@ Profile modes:
 
 - `schema`: schema-only metadata; safest default.
 - `stats`: provider/catalog statistics such as row estimates.
-- `sample`: explicit opt-in sampling; values are masked by default.
+- `sample`: allows bounded row sampling only when a matching `dataAccess` rule also allows it; values are masked by default.
 
 CLI overrides:
 
@@ -125,6 +129,65 @@ Validation rules:
 - `snapshot.sampleRows` requires `snapshot.profilingMode` to be `sample`.
 - `security.storeRawSamples` requires `snapshot.profilingMode` to be `sample`.
 - `snapshot.sampleRows` and `security.storeRawData` cannot both be true.
+
+## `dataAccess`
+
+`dataAccess` is the explicit allowlist for business-row access. Omitting it, or leaving `defaultMode` as `schemaOnly`, preserves the default behavior: DbGraph captures schema, constraints, indexes, SQL lineage, and safe statistics without reading row values.
+
+Use this section when you want configuration-controlled database exposure. Each
+table rule decides how deeply DbGraph may inspect matching tables:
+
+- Keep sensitive or out-of-scope tables in `schemaOnly` so agents can still understand their shape and relationships without seeing row values.
+- Use `stats` only for catalog/count-style provider metadata.
+- Use `sample` only for tables and columns that are safe to inspect, with an optional read-only `where` filter and a strict `limit`.
+- Downstream commands such as `context`, MCP tools, `analyze`, and `benchmark-agent` read from the snapshot and never expand access beyond the matched `dataAccess` rules.
+
+Example:
+
+```json
+{
+  "snapshot": {
+    "profilingMode": "sample",
+    "maxRowsPerTable": 50,
+    "sampleRows": true
+  },
+  "dataAccess": {
+    "defaultMode": "schemaOnly",
+    "tables": [
+      {
+        "pattern": "public.orders",
+        "mode": "sample",
+        "columns": ["id", "status", "total_amount", "created_at"],
+        "where": "created_at >= now() - interval '30 days'",
+        "limit": 50,
+        "storeRawValues": false
+      },
+      {
+        "pattern": "public.payments",
+        "mode": "schemaOnly"
+      }
+    ]
+  }
+}
+```
+
+Modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `schemaOnly` | Keep schema, constraints, indexes, and SQL lineage; never read row values. |
+| `stats` | Reserved for catalog/count-style stats; no row values. |
+| `sample` | Read only the listed columns from matching tables with a deterministic `LIMIT` and optional read-only `where`. |
+
+Validation rules:
+
+- `sample` rules require `snapshot.profilingMode` to be `sample`.
+- `sample.columns` must be non-empty.
+- `limit` must be greater than zero and cannot exceed `snapshot.maxRowsPerTable`.
+- `where` cannot contain semicolons or write-oriented SQL keywords.
+- `storeRawValues` defaults to `false`; sensitive-looking values are still masked when `security.maskPii` is true.
+
+Supported patterns are exact table names such as `public.orders` and simple `*` wildcards such as `public.audit_*`.
 
 ## `mcp`
 
