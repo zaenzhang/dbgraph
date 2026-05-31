@@ -26,6 +26,9 @@ Thumbs.db
 # Node/package artifacts
 /node_modules/
 /npm/node_modules/
+/site/node_modules/
+/site/dist/
+/site/.astro/
 /npm/*.tgz
 /coverage/
 

@@ -62,7 +62,8 @@ impl Ord for FindingSeverity {
 }
 
 impl FindingSeverity {
-    const fn rank(self) -> u8 {
+    #[must_use]
+    pub const fn rank(self) -> u8 {
         match self {
             Self::Critical => 4,
             Self::High => 3,
@@ -71,12 +72,27 @@ impl FindingSeverity {
         }
     }
 
-    const fn label(self) -> &'static str {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Critical => "critical",
             Self::High => "high",
             Self::Medium => "medium",
             Self::Low => "low",
+        }
+    }
+}
+
+impl FromStr for FindingSeverity {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "critical" => Ok(Self::Critical),
+            "high" => Ok(Self::High),
+            "medium" => Ok(Self::Medium),
+            "low" => Ok(Self::Low),
+            _ => Err("severity must be low, medium, high, or critical".to_owned()),
         }
     }
 }
@@ -108,6 +124,33 @@ pub struct AnalysisReport {
     pub top_findings: Vec<AnalysisFinding>,
     /// Numeric risk score derived from severity weights.
     pub risk_score: u32,
+    /// Findings suppressed by local project policy.
+    #[serde(default)]
+    pub suppressed_findings: Vec<AnalysisFinding>,
+    /// Count of suppressions and suppression warnings by label.
+    #[serde(default)]
+    pub suppression_counts: BTreeMap<String, usize>,
+    /// Optional CI gate result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<AnalysisGate>,
+}
+
+/// CI-oriented analysis gate summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisGate {
+    /// Whether configured gates passed.
+    pub passed: bool,
+    /// Severity threshold label for all active findings.
+    pub threshold: Option<String>,
+    /// Severity threshold label for new active findings.
+    pub new_threshold: Option<String>,
+    /// Active finding fingerprints that failed the threshold gate.
+    pub failed_fingerprints: Vec<String>,
+    /// New active finding fingerprints that failed the new-only threshold gate.
+    pub new_failed_fingerprints: Vec<String>,
+    /// Human-readable gate summary.
+    pub message: String,
 }
 
 /// High-level analysis summary.
@@ -168,6 +211,8 @@ pub struct AnalysisFinding {
     pub tags: Vec<String>,
     /// Related object names, such as SQL artifacts that reference the finding object.
     pub related_objects: Vec<String>,
+    /// Stable identity derived from rule id, object, and related objects.
+    pub fingerprint: String,
 }
 
 /// Rule-based snapshot analyzer.
@@ -223,6 +268,9 @@ impl AnalysisAnalyzer {
             sections,
             top_findings,
             risk_score,
+            suppressed_findings: Vec::new(),
+            suppression_counts: BTreeMap::new(),
+            gate: None,
         }
     }
 }
@@ -662,6 +710,7 @@ fn finding(
     related_objects: Vec<String>,
 ) -> AnalysisFinding {
     let metadata = rule_metadata(rule_id);
+    let fingerprint = finding_fingerprint(rule_id, &object.full_name, &related_objects);
     AnalysisFinding {
         scope,
         severity,
@@ -676,7 +725,15 @@ fn finding(
         confidence: metadata.confidence,
         tags: metadata.tags.iter().map(|tag| (*tag).to_owned()).collect(),
         related_objects,
+        fingerprint,
     }
+}
+
+fn finding_fingerprint(rule_id: &str, object: &str, related_objects: &[String]) -> String {
+    let mut related = related_objects.to_vec();
+    related.sort();
+    related.dedup();
+    format!("{rule_id}|{object}|{}", related.join(","))
 }
 
 struct RuleMetadata {
@@ -853,12 +910,19 @@ mod tests {
                     && finding.object == "public.customers.email"
             })
             .expect("sensitive finding should exist");
+        assert_eq!(
+            sensitive.fingerprint,
+            "risk.sensitive_column|public.customers.email|"
+        );
         assert_eq!(sensitive.title, "Sensitive column detected");
         assert!(sensitive.description.contains("PII"));
         assert!(sensitive.impact.contains("privacy"));
         assert!(sensitive.suggested_fix.contains("mask"));
         assert!(sensitive.confidence >= 0.8);
         assert!(sensitive.tags.contains(&"pii".to_owned()));
+        assert!(report.suppressed_findings.is_empty());
+        assert!(report.suppression_counts.is_empty());
+        assert!(report.gate.is_none());
 
         let sql_sensitive = report
             .findings

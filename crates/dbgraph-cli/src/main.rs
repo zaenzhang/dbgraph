@@ -23,7 +23,8 @@ use dbgraph_core::snapshot::{now_unix_ms, SnapshotStore};
 use dbgraph_core::sync::{plan_incremental_sync, SyncPlan};
 use dbgraph_core::{init_logging, version_string, DbGraphError, LogVerbosity, Result};
 use dbgraph_graph::analysis::{
-    AnalysisAnalyzer, AnalysisFinding, AnalysisOptions, AnalysisReport, AnalysisScope,
+    AnalysisAnalyzer, AnalysisFinding, AnalysisGate, AnalysisOptions, AnalysisReport,
+    AnalysisScope, FindingSeverity,
 };
 use dbgraph_graph::context::{ContextBuilder, ContextOptions, ContextPackage, RankingWeights};
 use dbgraph_graph::impact::{ImpactAnalyzer, ImpactOptions, ImpactReport};
@@ -37,7 +38,7 @@ use dbgraph_sql::{
     SqlDialect, SqlParser,
 };
 use dbgraph_storage::{GraphRepository, SqlArtifactRecord as StoredSqlArtifactRecord};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 fn main() -> ExitCode {
@@ -125,6 +126,15 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
             }
             Ok(())
         }
+        Command::Doctor {
+            path,
+            json,
+            check_db,
+        } => {
+            let root = path_or_current(path)?;
+            let report = doctor_project(&root, check_db)?;
+            print_json_or(&report, json, print_doctor_report)
+        }
         Command::Snapshot {
             path,
             json,
@@ -170,6 +180,16 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
         } => {
             let report = benchmark_project(tables, columns_per_table)?;
             print_json_or(&report, json, print_benchmark_report)
+        }
+        Command::BenchmarkAgent {
+            path,
+            scenario,
+            format,
+            output,
+        } => {
+            let root = path_or_current(path)?;
+            let report = benchmark_agent_project(&root, AgentBenchmarkOptions { scenario })?;
+            write_agent_benchmark_output(&report, format, output.as_deref())
         }
         Command::ValidateSql {
             path,
@@ -260,15 +280,39 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
             json,
             format,
             output,
+            include_suppressed,
+            suppressions,
+            fail_on,
+            fail_on_new,
+            baseline,
         } => {
             let root = path_or_current(path)?;
-            let report = analyze_project(&root, scope)?;
+            let report = analyze_project_with_options(
+                &root,
+                &AnalysisCliOptions {
+                    scope,
+                    include_suppressed,
+                    suppressions,
+                    fail_on,
+                    fail_on_new,
+                    baseline,
+                },
+            )?;
             let format = if json {
                 AnalysisOutputFormat::Json
             } else {
                 format
             };
-            write_analysis_output(&report, format, output.as_deref())
+            write_analysis_output(&report, format, output.as_deref())?;
+            if report.gate.as_ref().is_some_and(|gate| !gate.passed) {
+                return Err(DbGraphError::invalid_config(
+                    report.gate.as_ref().map_or_else(
+                        || "analysis gate failed".to_owned(),
+                        |gate| gate.message.clone(),
+                    ),
+                ));
+            }
+            Ok(())
         }
         Command::Install {
             targets,
@@ -306,6 +350,11 @@ enum Command {
         path: Option<PathBuf>,
         json: bool,
     },
+    Doctor {
+        path: Option<PathBuf>,
+        json: bool,
+        check_db: bool,
+    },
     Snapshot {
         path: Option<PathBuf>,
         json: bool,
@@ -321,6 +370,12 @@ enum Command {
         tables: usize,
         columns_per_table: usize,
         json: bool,
+    },
+    BenchmarkAgent {
+        path: Option<PathBuf>,
+        scenario: String,
+        format: AgentBenchmarkFormat,
+        output: Option<PathBuf>,
     },
     ValidateSql {
         path: Option<PathBuf>,
@@ -369,6 +424,11 @@ enum Command {
         json: bool,
         format: AnalysisOutputFormat,
         output: Option<PathBuf>,
+        include_suppressed: bool,
+        suppressions: Option<PathBuf>,
+        fail_on: Option<FindingSeverity>,
+        fail_on_new: Option<FindingSeverity>,
+        baseline: Option<PathBuf>,
     },
     Install {
         targets: Vec<AgentKind>,
@@ -392,6 +452,26 @@ enum AnalysisOutputFormat {
     Markdown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentBenchmarkFormat {
+    Text,
+    Json,
+    Markdown,
+}
+
+impl std::str::FromStr for AgentBenchmarkFormat {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "text" => Ok(Self::Text),
+            "json" => Ok(Self::Json),
+            "markdown" | "md" => Ok(Self::Markdown),
+            _ => Err("agent benchmark format must be text, json, or markdown".to_owned()),
+        }
+    }
+}
+
 impl std::str::FromStr for AnalysisOutputFormat {
     type Err = String;
 
@@ -411,15 +491,20 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
     let mut command = None;
     let mut pending_init = false;
     let mut pending_status = false;
+    let mut pending_doctor = false;
     let mut pending_snapshot = false;
     let mut pending_sync = false;
     let mut pending_benchmark = false;
+    let mut pending_benchmark_agent = false;
     let mut init_path = None;
     let mut init_force = false;
     let mut init_interactive = false;
     let mut init_yes = false;
     let mut status_path = None;
     let mut status_json = false;
+    let mut doctor_path = None;
+    let mut doctor_json = false;
+    let mut doctor_check_db = false;
     let mut snapshot_path = None;
     let mut snapshot_json = false;
     let mut snapshot_profile = None;
@@ -430,6 +515,10 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
     let mut benchmark_tables = 1_000_usize;
     let mut benchmark_columns_per_table = 4_usize;
     let mut benchmark_json = false;
+    let mut benchmark_agent_path = None;
+    let mut benchmark_agent_scenario = "teashop".to_owned();
+    let mut benchmark_agent_format = AgentBenchmarkFormat::Text;
+    let mut benchmark_agent_output = None;
     let mut pending_validate_sql = false;
     let mut validate_path = None;
     let mut validate_sql = None;
@@ -465,6 +554,11 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
     let mut analyze_json = false;
     let mut analyze_format = AnalysisOutputFormat::Text;
     let mut analyze_output = None;
+    let mut analyze_include_suppressed = false;
+    let mut analyze_suppressions = None;
+    let mut analyze_fail_on = None;
+    let mut analyze_fail_on_new = None;
+    let mut analyze_baseline = None;
     let mut pending_install = false;
     let mut install_target_raw: Option<String> = None;
     let mut install_location = None;
@@ -523,6 +617,17 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
                 )?;
                 pending_status = true;
             }
+            "doctor" => {
+                set_command(
+                    &mut command,
+                    Command::Doctor {
+                        path: None,
+                        json: false,
+                        check_db: false,
+                    },
+                )?;
+                pending_doctor = true;
+            }
             "snapshot" => {
                 set_command(
                     &mut command,
@@ -556,6 +661,18 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
                     },
                 )?;
                 pending_benchmark = true;
+            }
+            "benchmark-agent" => {
+                set_command(
+                    &mut command,
+                    Command::BenchmarkAgent {
+                        path: None,
+                        scenario: "teashop".to_owned(),
+                        format: AgentBenchmarkFormat::Text,
+                        output: None,
+                    },
+                )?;
+                pending_benchmark_agent = true;
             }
             "validate-sql" => {
                 set_command(
@@ -649,6 +766,11 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
                         json: false,
                         format: AnalysisOutputFormat::Text,
                         output: None,
+                        include_suppressed: false,
+                        suppressions: None,
+                        fail_on: None,
+                        fail_on_new: None,
+                        baseline: None,
                     },
                 )?;
                 pending_analyze = true;
@@ -696,6 +818,12 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
             "--json" | "-j" if pending_status => {
                 status_json = true;
             }
+            "--json" | "-j" if pending_doctor => {
+                doctor_json = true;
+            }
+            "--check-db" if pending_doctor => {
+                doctor_check_db = true;
+            }
             "--json" | "-j" if pending_snapshot => {
                 snapshot_json = true;
             }
@@ -728,6 +856,26 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
             }
             "--json" | "-j" if pending_benchmark => {
                 benchmark_json = true;
+            }
+            "--scenario" if pending_benchmark_agent => {
+                idx += 1;
+                benchmark_agent_scenario.clone_from(args.get(idx).ok_or_else(|| {
+                    DbGraphError::invalid_argument("`--scenario` requires a value")
+                })?);
+            }
+            "--format" if pending_benchmark_agent => {
+                idx += 1;
+                let value = args.get(idx).ok_or_else(|| {
+                    DbGraphError::invalid_argument("`--format` requires text, json, or markdown")
+                })?;
+                benchmark_agent_format = value.parse().map_err(DbGraphError::invalid_argument)?;
+            }
+            "--output" if pending_benchmark_agent => {
+                idx += 1;
+                let value = args.get(idx).ok_or_else(|| {
+                    DbGraphError::invalid_argument("`--output` requires a file path")
+                })?;
+                benchmark_agent_output = Some(PathBuf::from(value));
             }
             "--tables" if pending_benchmark => {
                 idx += 1;
@@ -872,6 +1020,37 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
                 })?;
                 analyze_output = Some(PathBuf::from(value));
             }
+            "--include-suppressed" if pending_analyze => {
+                analyze_include_suppressed = true;
+            }
+            "--suppressions" if pending_analyze => {
+                idx += 1;
+                let value = args.get(idx).ok_or_else(|| {
+                    DbGraphError::invalid_argument("`--suppressions` requires a file path")
+                })?;
+                analyze_suppressions = Some(PathBuf::from(value));
+            }
+            "--fail-on" if pending_analyze => {
+                idx += 1;
+                let value = args.get(idx).ok_or_else(|| {
+                    DbGraphError::invalid_argument("`--fail-on` requires a severity")
+                })?;
+                analyze_fail_on = Some(value.parse().map_err(DbGraphError::invalid_argument)?);
+            }
+            "--fail-on-new" if pending_analyze => {
+                idx += 1;
+                let value = args.get(idx).ok_or_else(|| {
+                    DbGraphError::invalid_argument("`--fail-on-new` requires a severity")
+                })?;
+                analyze_fail_on_new = Some(value.parse().map_err(DbGraphError::invalid_argument)?);
+            }
+            "--baseline" if pending_analyze => {
+                idx += 1;
+                let value = args.get(idx).ok_or_else(|| {
+                    DbGraphError::invalid_argument("`--baseline` requires a file path")
+                })?;
+                analyze_baseline = Some(PathBuf::from(value));
+            }
             "--sql" if pending_validate_sql => {
                 idx += 1;
                 let value = args.get(idx).ok_or_else(|| {
@@ -900,10 +1079,17 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
                     init_path = Some(PathBuf::from(arg));
                 } else if pending_status && !arg.starts_with('-') && status_path.is_none() {
                     status_path = Some(PathBuf::from(arg));
+                } else if pending_doctor && !arg.starts_with('-') && doctor_path.is_none() {
+                    doctor_path = Some(PathBuf::from(arg));
                 } else if pending_snapshot && !arg.starts_with('-') && snapshot_path.is_none() {
                     snapshot_path = Some(PathBuf::from(arg));
                 } else if pending_sync && !arg.starts_with('-') && sync_path.is_none() {
                     sync_path = Some(PathBuf::from(arg));
+                } else if pending_benchmark_agent
+                    && !arg.starts_with('-')
+                    && benchmark_agent_path.is_none()
+                {
+                    benchmark_agent_path = Some(PathBuf::from(arg));
                 } else if pending_validate_sql && !arg.starts_with('-') && validate_path.is_none() {
                     validate_path = Some(PathBuf::from(arg));
                 } else if pending_search && !arg.starts_with('-') {
@@ -954,6 +1140,13 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
             json: status_json,
         });
     }
+    if pending_doctor {
+        command = Some(Command::Doctor {
+            path: doctor_path,
+            json: doctor_json,
+            check_db: doctor_check_db,
+        });
+    }
     if pending_snapshot {
         command = Some(Command::Snapshot {
             path: snapshot_path,
@@ -974,6 +1167,19 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
             tables: benchmark_tables,
             columns_per_table: benchmark_columns_per_table,
             json: benchmark_json,
+        });
+    }
+    if pending_benchmark_agent {
+        if benchmark_agent_scenario != "teashop" {
+            return Err(DbGraphError::invalid_argument(
+                "`benchmark-agent` currently supports only `--scenario teashop`",
+            ));
+        }
+        command = Some(Command::BenchmarkAgent {
+            path: benchmark_agent_path,
+            scenario: benchmark_agent_scenario,
+            format: benchmark_agent_format,
+            output: benchmark_agent_output,
         });
     }
     if pending_validate_sql {
@@ -1053,6 +1259,11 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParsedArgs> {
             json: analyze_json,
             format: analyze_format,
             output: analyze_output,
+            include_suppressed: analyze_include_suppressed,
+            suppressions: analyze_suppressions,
+            fail_on: analyze_fail_on,
+            fail_on_new: analyze_fail_on_new,
+            baseline: analyze_baseline,
         });
     }
     if pending_install {
@@ -1399,6 +1610,42 @@ struct StatusReport {
     mcp_suggestion: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DoctorStatus {
+    Ok,
+    Warning,
+    Error,
+}
+
+impl DoctorStatus {
+    const fn rank(self) -> u8 {
+        match self {
+            Self::Ok => 0,
+            Self::Warning => 1,
+            Self::Error => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DoctorCheck {
+    id: String,
+    status: DoctorStatus,
+    message: String,
+    suggestion: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DoctorReport {
+    status: DoctorStatus,
+    project_root: PathBuf,
+    checks: Vec<DoctorCheck>,
+    suggested_next_commands: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SnapshotSummary {
@@ -1595,6 +1842,60 @@ struct BenchmarkReport {
     schema_hash: String,
 }
 
+#[derive(Debug, Clone)]
+struct AgentBenchmarkOptions {
+    scenario: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentBenchmarkReport {
+    scenario: String,
+    summary: AgentBenchmarkSummary,
+    cases: Vec<AgentBenchmarkCaseReport>,
+    limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentBenchmarkSummary {
+    baseline_estimated_tokens: usize,
+    dbgraph_estimated_tokens: usize,
+    token_reduction_percent: f64,
+    baseline_retrieval_steps: usize,
+    dbgraph_retrieval_steps: usize,
+    evidence_recall_delta: f64,
+    precision_delta: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentBenchmarkCaseReport {
+    id: String,
+    question: String,
+    expected_objects: Vec<String>,
+    baseline: AgentBenchmarkModeMetrics,
+    dbgraph: AgentBenchmarkModeMetrics,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentBenchmarkModeMetrics {
+    context_bytes: usize,
+    estimated_tokens: usize,
+    retrieval_steps: usize,
+    evidence_recall: f64,
+    relevant_object_precision: f64,
+    matched_objects: Vec<String>,
+}
+
+struct AgentBenchmarkCase {
+    id: &'static str,
+    question: &'static str,
+    expected_objects: &'static [&'static str],
+    query: &'static str,
+}
+
 fn benchmark_project(tables: usize, columns_per_table: usize) -> Result<BenchmarkReport> {
     let snapshot = synthetic_schema_snapshot(SyntheticSchemaOptions {
         table_count: tables,
@@ -1608,6 +1909,291 @@ fn benchmark_project(tables: usize, columns_per_table: usize) -> Result<Benchmar
         edge_count: snapshot.edges.len(),
         schema_hash,
     })
+}
+
+fn benchmark_agent_project(
+    start: impl AsRef<Path>,
+    options: AgentBenchmarkOptions,
+) -> Result<AgentBenchmarkReport> {
+    if options.scenario != "teashop" {
+        return Err(DbGraphError::invalid_argument(
+            "`benchmark-agent` currently supports only `--scenario teashop`",
+        ));
+    }
+    let context = discover_context(start.as_ref())?;
+    require_graph_index(&context)?;
+    let snapshot = latest_snapshot(&context)?;
+    let analysis = AnalysisAnalyzer::new().analyze(&snapshot, &AnalysisOptions::default());
+    let baseline_materials = collect_baseline_materials(context.project_root())?;
+    let raw_catalog =
+        serde_json::to_string_pretty(&snapshot).map_err(|source| DbGraphError::Internal {
+            message: format!("failed to serialize raw catalog for benchmark: {source}"),
+        })?;
+    let baseline_context = format!(
+        "{}\n\n-- raw database catalog --\n{raw_catalog}",
+        baseline_materials.join("\n\n")
+    );
+    let analysis_json =
+        serde_json::to_string(&analysis).map_err(|source| DbGraphError::Internal {
+            message: format!("failed to serialize analysis for benchmark: {source}"),
+        })?;
+    let cases = teashop_benchmark_cases()
+        .into_iter()
+        .map(|case| {
+            let context_package = ContextBuilder::new(RankingWeights::default()).build(
+                &snapshot,
+                case.query,
+                &ContextOptions {
+                    token_budget: 1_200,
+                    max_objects: 12,
+                },
+            );
+            let context_json = serde_json::to_string(&context_package).map_err(|source| {
+                DbGraphError::Internal {
+                    message: format!("failed to serialize context for benchmark: {source}"),
+                }
+            })?;
+            let relevant_findings = analysis
+                .findings
+                .iter()
+                .filter(|finding| {
+                    case.id == "review-report"
+                        || case.expected_objects.iter().any(|object| {
+                            finding.object.contains(object) || object.contains(&finding.object)
+                        })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let findings_json = serde_json::to_string(&relevant_findings).map_err(|source| {
+                DbGraphError::Internal {
+                    message: format!("failed to serialize findings for benchmark: {source}"),
+                }
+            })?;
+            let dbgraph_context = if case.id == "review-report" {
+                format!("{analysis_json}\n{context_json}")
+            } else {
+                format!("{findings_json}\n{context_json}")
+            };
+            Ok(AgentBenchmarkCaseReport {
+                id: case.id.to_owned(),
+                question: case.question.to_owned(),
+                expected_objects: case
+                    .expected_objects
+                    .iter()
+                    .map(|object| (*object).to_owned())
+                    .collect(),
+                baseline: benchmark_mode_metrics(
+                    &baseline_context,
+                    baseline_materials.len().max(1),
+                    case.expected_objects,
+                ),
+                dbgraph: benchmark_mode_metrics(&dbgraph_context, 2, case.expected_objects),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let summary = summarize_agent_benchmark(&cases);
+    Ok(AgentBenchmarkReport {
+        scenario: options.scenario,
+        summary,
+        cases,
+        limitations: vec![
+            "Offline benchmark estimates context quality; it does not call an LLM.".to_owned(),
+            "Token counts are rough deterministic estimates, not provider billing numbers."
+                .to_owned(),
+        ],
+    })
+}
+
+fn teashop_benchmark_cases() -> Vec<AgentBenchmarkCase> {
+    vec![
+        AgentBenchmarkCase {
+            id: "pii-fields",
+            question: "Which columns are likely PII or secrets?",
+            expected_objects: &["public.customers.email", "public.payments.provider_token"],
+            query: "PII sensitive email provider token",
+        },
+        AgentBenchmarkCase {
+            id: "sql-sensitive-read",
+            question: "Which SQL artifacts read sensitive customer fields?",
+            expected_objects: &["public.customers.email"],
+            query: "SQL reads customers email sensitive column",
+        },
+        AgentBenchmarkCase {
+            id: "orders-status-quality",
+            question: "What risks exist around public.orders.status?",
+            expected_objects: &["public.orders.status"],
+            query: "orders status quality performance",
+        },
+        AgentBenchmarkCase {
+            id: "schema-quality",
+            question: "Which schema quality issues need review?",
+            expected_objects: &["public.orders", "public.payments"],
+            query: "missing primary key foreign key schema quality",
+        },
+        AgentBenchmarkCase {
+            id: "index-risk",
+            question: "Which workload columns may need indexes?",
+            expected_objects: &["public.orders.status"],
+            query: "filter join without index orders status",
+        },
+        AgentBenchmarkCase {
+            id: "review-report",
+            question: "Can the agent produce a structured database review report?",
+            expected_objects: &[
+                "Security & Privacy",
+                "Data Integrity & Schema Quality",
+                "Performance",
+            ],
+            query: "structured analysis report security quality performance",
+        },
+    ]
+}
+
+fn collect_baseline_materials(root: &Path) -> Result<Vec<String>> {
+    let mut materials = Vec::new();
+    collect_baseline_materials_from(root, root, &mut materials)?;
+    Ok(materials)
+}
+
+fn collect_baseline_materials_from(
+    root: &Path,
+    dir: &Path,
+    materials: &mut Vec<String>,
+) -> Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir).map_err(|source| DbGraphError::io(dir, source))? {
+        let entry = entry.map_err(|source| DbGraphError::io(dir, source))?;
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if name == ".dbgraph" || name == "target" || name == ".git" {
+            continue;
+        }
+        if path.is_dir() {
+            collect_baseline_materials_from(root, &path, materials)?;
+        } else if is_baseline_material(&path) {
+            let relative = path.strip_prefix(root).unwrap_or(&path).display();
+            let content = fs::read_to_string(&path).unwrap_or_default();
+            materials.push(format!("-- {relative} --\n{content}"));
+        }
+    }
+    Ok(())
+}
+
+fn is_baseline_material(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension, "sql" | "md" | "json" | "toml"))
+}
+
+fn benchmark_mode_metrics(
+    context: &str,
+    retrieval_steps: usize,
+    expected_objects: &[&str],
+) -> AgentBenchmarkModeMetrics {
+    let matched_objects = expected_objects
+        .iter()
+        .filter(|object| context.contains(**object))
+        .map(|object| (*object).to_owned())
+        .collect::<Vec<_>>();
+    let evidence_recall = ratio(matched_objects.len(), expected_objects.len());
+    let relevant_object_precision = if matched_objects.is_empty() {
+        0.0
+    } else {
+        ratio(
+            matched_objects.len(),
+            count_object_like_mentions(context).max(matched_objects.len()),
+        )
+    };
+    AgentBenchmarkModeMetrics {
+        context_bytes: context.len(),
+        estimated_tokens: estimate_tokens(context),
+        retrieval_steps,
+        evidence_recall,
+        relevant_object_precision,
+        matched_objects,
+    }
+}
+
+fn count_object_like_mentions(context: &str) -> usize {
+    context
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | '"' | '\'' | '(' | ')' | ';'))
+        .filter(|token| token.matches('.').count() >= 1 && token.contains("public."))
+        .count()
+}
+
+fn ratio(numerator: usize, denominator: usize) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        usize_to_f64(numerator) / usize_to_f64(denominator)
+    }
+}
+
+fn usize_to_f64(value: usize) -> f64 {
+    f64::from(u32::try_from(value).unwrap_or(u32::MAX))
+}
+
+fn estimate_tokens(text: &str) -> usize {
+    text.chars().count().div_ceil(4).max(1)
+}
+
+fn summarize_agent_benchmark(cases: &[AgentBenchmarkCaseReport]) -> AgentBenchmarkSummary {
+    let baseline_estimated_tokens = cases
+        .iter()
+        .map(|case| case.baseline.estimated_tokens)
+        .sum::<usize>();
+    let dbgraph_estimated_tokens = cases
+        .iter()
+        .map(|case| case.dbgraph.estimated_tokens)
+        .sum::<usize>();
+    let baseline_retrieval_steps = cases
+        .iter()
+        .map(|case| case.baseline.retrieval_steps)
+        .sum::<usize>();
+    let dbgraph_retrieval_steps = cases
+        .iter()
+        .map(|case| case.dbgraph.retrieval_steps)
+        .sum::<usize>();
+    let baseline_recall = average(cases.iter().map(|case| case.baseline.evidence_recall));
+    let dbgraph_recall = average(cases.iter().map(|case| case.dbgraph.evidence_recall));
+    let baseline_precision = average(
+        cases
+            .iter()
+            .map(|case| case.baseline.relevant_object_precision),
+    );
+    let dbgraph_precision = average(
+        cases
+            .iter()
+            .map(|case| case.dbgraph.relevant_object_precision),
+    );
+    AgentBenchmarkSummary {
+        baseline_estimated_tokens,
+        dbgraph_estimated_tokens,
+        token_reduction_percent: if baseline_estimated_tokens == 0 {
+            0.0
+        } else {
+            100.0 * usize_to_f64(baseline_estimated_tokens.saturating_sub(dbgraph_estimated_tokens))
+                / usize_to_f64(baseline_estimated_tokens)
+        },
+        baseline_retrieval_steps,
+        dbgraph_retrieval_steps,
+        evidence_recall_delta: dbgraph_recall - baseline_recall,
+        precision_delta: dbgraph_precision - baseline_precision,
+    }
+}
+
+fn average(values: impl Iterator<Item = f64>) -> f64 {
+    let values = values.collect::<Vec<_>>();
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<f64>() / usize_to_f64(values.len())
+    }
 }
 
 fn enrich_snapshot_with_sql(
@@ -1713,6 +2299,120 @@ fn print_benchmark_report(report: &BenchmarkReport) {
     println!("Objects: {}", report.object_count);
     println!("Edges: {}", report.edge_count);
     println!("Schema hash: {}", report.schema_hash);
+}
+
+fn write_agent_benchmark_output(
+    report: &AgentBenchmarkReport,
+    format: AgentBenchmarkFormat,
+    output: Option<&Path>,
+) -> Result<()> {
+    let rendered = match format {
+        AgentBenchmarkFormat::Text => render_agent_benchmark_text(report),
+        AgentBenchmarkFormat::Json => {
+            serde_json::to_string_pretty(report).map_err(|source| DbGraphError::Internal {
+                message: format!("failed to serialize agent benchmark: {source}"),
+            })?
+        }
+        AgentBenchmarkFormat::Markdown => render_agent_benchmark_markdown(report),
+    };
+    if let Some(path) = output {
+        fs::write(path, format!("{rendered}\n")).map_err(|source| DbGraphError::io(path, source))
+    } else {
+        println!("{rendered}");
+        Ok(())
+    }
+}
+
+fn render_agent_benchmark_text(report: &AgentBenchmarkReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "DbGraph offline agent benchmark");
+    let _ = writeln!(output, "Scenario: {}", report.scenario);
+    let _ = writeln!(
+        output,
+        "Estimated tokens: baseline={} dbgraph={} reduction={:.1}%",
+        report.summary.baseline_estimated_tokens,
+        report.summary.dbgraph_estimated_tokens,
+        report.summary.token_reduction_percent
+    );
+    let _ = writeln!(
+        output,
+        "Retrieval steps: baseline={} dbgraph={}",
+        report.summary.baseline_retrieval_steps, report.summary.dbgraph_retrieval_steps
+    );
+    for case in &report.cases {
+        let _ = writeln!(
+            output,
+            "- {}: baseline recall {:.2}, dbgraph recall {:.2}",
+            case.id, case.baseline.evidence_recall, case.dbgraph.evidence_recall
+        );
+    }
+    output
+}
+
+fn render_agent_benchmark_markdown(report: &AgentBenchmarkReport) -> String {
+    let mut output = String::new();
+    output.push_str("# DbGraph Offline Agent Benchmark\n\n");
+    let _ = writeln!(output, "- Scenario: `{}`", report.scenario);
+    let _ = writeln!(
+        output,
+        "- Token reduction: `{:.1}%`\n",
+        report.summary.token_reduction_percent
+    );
+    output.push_str("| Metric | Baseline | DbGraph |\n|---|---:|---:|\n");
+    let _ = writeln!(
+        output,
+        "| Estimated tokens | {} | {} |",
+        report.summary.baseline_estimated_tokens, report.summary.dbgraph_estimated_tokens
+    );
+    let _ = writeln!(
+        output,
+        "| Retrieval steps | {} | {} |",
+        report.summary.baseline_retrieval_steps, report.summary.dbgraph_retrieval_steps
+    );
+    let _ = writeln!(
+        output,
+        "| Evidence recall delta | - | {:+.2} |",
+        report.summary.evidence_recall_delta
+    );
+    let _ = writeln!(
+        output,
+        "| Precision delta | - | {:+.2} |\n",
+        report.summary.precision_delta
+    );
+    output.push_str("## Cases\n\n");
+    for case in &report.cases {
+        let _ = writeln!(output, "### {}\n", case.id);
+        let _ = writeln!(output, "{}\n", case.question);
+        let _ = writeln!(
+            output,
+            "Expected objects: `{}`\n",
+            case.expected_objects.join("`, `")
+        );
+        output.push_str(
+            "| Mode | Tokens | Steps | Recall | Precision |\n|---|---:|---:|---:|---:|\n",
+        );
+        let _ = writeln!(
+            output,
+            "| Baseline | {} | {} | {:.2} | {:.2} |",
+            case.baseline.estimated_tokens,
+            case.baseline.retrieval_steps,
+            case.baseline.evidence_recall,
+            case.baseline.relevant_object_precision
+        );
+        let _ = writeln!(
+            output,
+            "| DbGraph | {} | {} | {:.2} | {:.2} |\n",
+            case.dbgraph.estimated_tokens,
+            case.dbgraph.retrieval_steps,
+            case.dbgraph.evidence_recall,
+            case.dbgraph.relevant_object_precision
+        );
+    }
+    output.push_str("## Limitations\n\n");
+    for limitation in &report.limitations {
+        let _ = writeln!(output, "- {limitation}");
+    }
+    output
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2253,11 +2953,265 @@ fn print_impact_report(report: &ImpactReport) {
     }
 }
 
+#[derive(Debug, Clone)]
+struct AnalysisCliOptions {
+    scope: AnalysisScope,
+    include_suppressed: bool,
+    suppressions: Option<PathBuf>,
+    fail_on: Option<FindingSeverity>,
+    fail_on_new: Option<FindingSeverity>,
+    baseline: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SuppressionFile {
+    version: u32,
+    suppressions: Vec<FindingSuppression>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FindingSuppression {
+    rule_id: String,
+    object: String,
+    reason: String,
+    owner: String,
+    expires_at: Option<String>,
+}
+
+#[cfg(test)]
 fn analyze_project(start: impl AsRef<Path>, scope: AnalysisScope) -> Result<AnalysisReport> {
+    analyze_project_with_options(
+        start,
+        &AnalysisCliOptions {
+            scope,
+            include_suppressed: false,
+            suppressions: None,
+            fail_on: None,
+            fail_on_new: None,
+            baseline: None,
+        },
+    )
+}
+
+fn analyze_project_with_options(
+    start: impl AsRef<Path>,
+    options: &AnalysisCliOptions,
+) -> Result<AnalysisReport> {
     let context = discover_context(start.as_ref())?;
     require_graph_index(&context)?;
     let snapshot = latest_snapshot(&context)?;
-    Ok(AnalysisAnalyzer::new().analyze(&snapshot, &AnalysisOptions { scope }))
+    let mut report = AnalysisAnalyzer::new().analyze(
+        &snapshot,
+        &AnalysisOptions {
+            scope: options.scope,
+        },
+    );
+    apply_suppressions(&context, &mut report, options)?;
+    apply_analysis_gate(&mut report, options)?;
+    Ok(report)
+}
+
+fn apply_suppressions(
+    context: &ProjectContext,
+    report: &mut AnalysisReport,
+    options: &AnalysisCliOptions,
+) -> Result<()> {
+    let suppression_path = options
+        .suppressions
+        .clone()
+        .unwrap_or_else(|| context.dbgraph_dir().join("suppressions.json"));
+    if !suppression_path.is_file() {
+        return Ok(());
+    }
+    let policy_text = fs::read_to_string(&suppression_path)
+        .map_err(|source| DbGraphError::io(&suppression_path, source))?;
+    let policy = serde_json::from_str::<SuppressionFile>(&policy_text).map_err(|source| {
+        DbGraphError::invalid_config(format!(
+            "failed to parse suppressions {}: {source}",
+            suppression_path.display()
+        ))
+    })?;
+    if policy.version != 1 {
+        return Err(DbGraphError::invalid_config(
+            "suppressions.json version must be 1",
+        ));
+    }
+    let mut active = Vec::new();
+    let mut suppressed = Vec::new();
+    let mut counts = std::collections::BTreeMap::new();
+    for finding in std::mem::take(&mut report.findings) {
+        let matched = policy.suppressions.iter().find(|suppression| {
+            suppression.rule_id == finding.rule_id && suppression.object == finding.object
+        });
+        if let Some(suppression) = matched {
+            if suppression
+                .expires_at
+                .as_deref()
+                .is_some_and(suppression_expired)
+            {
+                *counts.entry("expired".to_owned()).or_insert(0) += 1;
+                active.push(finding);
+            } else {
+                *counts.entry("suppressed".to_owned()).or_insert(0) += 1;
+                suppressed.push(finding);
+            }
+        } else {
+            active.push(finding);
+        }
+    }
+    if options.include_suppressed {
+        let mut combined = active.clone();
+        combined.extend(suppressed.clone());
+        combined.sort_by(|left, right| {
+            right
+                .severity
+                .cmp(&left.severity)
+                .then_with(|| left.rule_id.cmp(&right.rule_id))
+                .then_with(|| left.object.cmp(&right.object))
+        });
+        report.findings = combined;
+    } else {
+        report.findings = active;
+    }
+    report.suppressed_findings = suppressed;
+    report.suppression_counts = counts;
+    refresh_analysis_summary(report);
+    Ok(())
+}
+
+fn suppression_expired(value: &str) -> bool {
+    parse_yyyy_mm_dd(value).is_some_and(|date| date < today_utc_date())
+}
+
+fn parse_yyyy_mm_dd(value: &str) -> Option<(i32, u32, u32)> {
+    let mut parts = value.split('-');
+    let year = parts.next()?.parse().ok()?;
+    let month = parts.next()?.parse().ok()?;
+    let day = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((year, month, day))
+}
+
+fn today_utc_date() -> (i32, u32, u32) {
+    let days = UNIX_EPOCH.elapsed().map_or(0, |duration| {
+        i64::try_from(duration.as_secs() / 86_400).unwrap_or(0)
+    });
+    civil_from_days(days)
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + i64::from(month <= 2);
+    (
+        i32::try_from(year).unwrap_or(i32::MAX),
+        u32::try_from(month).unwrap_or(1),
+        u32::try_from(day).unwrap_or(1),
+    )
+}
+
+fn refresh_analysis_summary(report: &mut AnalysisReport) {
+    report.severity_counts.clear();
+    for finding in &report.findings {
+        *report
+            .severity_counts
+            .entry(finding.severity.label().to_owned())
+            .or_insert(0) += 1;
+    }
+    report.risk_score = report
+        .findings
+        .iter()
+        .map(|finding| match finding.severity {
+            FindingSeverity::Critical => 25,
+            FindingSeverity::High => 10,
+            FindingSeverity::Medium => 5,
+            FindingSeverity::Low => 1,
+        })
+        .sum();
+    report.overview.total_findings = report.findings.len();
+    report.overview.risk_score = report.risk_score;
+    report.overview.summary = if report.findings.is_empty() {
+        "No active risk, quality, or performance findings were detected.".to_owned()
+    } else {
+        format!(
+            "{} active findings detected with risk score {}.",
+            report.findings.len(),
+            report.risk_score
+        )
+    };
+    report.top_findings = report.findings.iter().take(5).cloned().collect();
+}
+
+fn apply_analysis_gate(report: &mut AnalysisReport, options: &AnalysisCliOptions) -> Result<()> {
+    if options.fail_on.is_none() && options.fail_on_new.is_none() {
+        return Ok(());
+    }
+    let failed_fingerprints = options.fail_on.map_or_else(Vec::new, |threshold| {
+        report
+            .findings
+            .iter()
+            .filter(|finding| finding.severity >= threshold)
+            .map(|finding| finding.fingerprint.clone())
+            .collect()
+    });
+    let baseline_fingerprints = options
+        .baseline
+        .as_deref()
+        .map(read_baseline_fingerprints)
+        .transpose()?
+        .unwrap_or_default();
+    let new_failed_fingerprints = options.fail_on_new.map_or_else(Vec::new, |threshold| {
+        report
+            .findings
+            .iter()
+            .filter(|finding| finding.severity >= threshold)
+            .filter(|finding| !baseline_fingerprints.contains(&finding.fingerprint))
+            .map(|finding| finding.fingerprint.clone())
+            .collect()
+    });
+    let passed = failed_fingerprints.is_empty() && new_failed_fingerprints.is_empty();
+    report.gate = Some(AnalysisGate {
+        passed,
+        threshold: options.fail_on.map(|severity| severity.label().to_owned()),
+        new_threshold: options
+            .fail_on_new
+            .map(|severity| severity.label().to_owned()),
+        failed_fingerprints,
+        new_failed_fingerprints,
+        message: if passed {
+            "analysis gate passed".to_owned()
+        } else {
+            "analysis gate failed".to_owned()
+        },
+    });
+    Ok(())
+}
+
+fn read_baseline_fingerprints(path: &Path) -> Result<std::collections::BTreeSet<String>> {
+    let content = fs::read_to_string(path).map_err(|source| DbGraphError::io(path, source))?;
+    let report = serde_json::from_str::<AnalysisReport>(&content).map_err(|source| {
+        DbGraphError::invalid_config(format!(
+            "failed to parse analysis baseline {}: {source}",
+            path.display()
+        ))
+    })?;
+    Ok(report
+        .findings
+        .into_iter()
+        .chain(report.suppressed_findings)
+        .map(|finding| finding.fingerprint)
+        .collect())
 }
 
 fn write_analysis_output(
@@ -2578,6 +3532,278 @@ fn print_status(status: &StatusReport) {
     println!("MCP: {}", status.mcp_suggestion);
 }
 
+#[allow(clippy::too_many_lines)]
+fn doctor_project(start: impl AsRef<Path>, check_db: bool) -> Result<DoctorReport> {
+    let start = start.as_ref();
+    let context = ProjectContext::discover_from(start)?
+        .unwrap_or_else(|| ProjectContext::from_project_root(start));
+    let mut checks = Vec::new();
+    push_check(
+        &mut checks,
+        "project",
+        DoctorStatus::Ok,
+        format!("Project root: {}", context.project_root().display()),
+        None::<String>,
+    );
+    push_check(
+        &mut checks,
+        "dbgraph_dir",
+        if context.dbgraph_dir().is_dir() {
+            DoctorStatus::Ok
+        } else {
+            DoctorStatus::Error
+        },
+        if context.dbgraph_dir().is_dir() {
+            format!("Found {}", context.dbgraph_dir().display())
+        } else {
+            format!("Missing {}", context.dbgraph_dir().display())
+        },
+        (!context.dbgraph_dir().is_dir()).then_some("dbgraph init -i --yes".to_owned()),
+    );
+
+    let config = match DbGraphConfig::load(&context) {
+        Ok(config) => {
+            push_check(
+                &mut checks,
+                "config",
+                DoctorStatus::Ok,
+                format!("Config is valid: {}", context.config_path().display()),
+                None::<String>,
+            );
+            Some(config)
+        }
+        Err(err) => {
+            push_check(
+                &mut checks,
+                "config",
+                DoctorStatus::Error,
+                err.to_string(),
+                Some("dbgraph init -i --yes".to_owned()),
+            );
+            None
+        }
+    };
+
+    if let Some(config) = &config {
+        let provider_known = ProviderRegistry.get(&config.database.provider).is_some();
+        push_check(
+            &mut checks,
+            "provider",
+            if provider_known {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Error
+            },
+            format!("Provider: {}", config.database.provider),
+            (!provider_known).then_some("choose a supported database.provider".to_owned()),
+        );
+        if let Some(env_name) = config.database.connection_env.as_deref() {
+            let present = env::var(env_name).is_ok_and(|value| !value.trim().is_empty());
+            push_check(
+                &mut checks,
+                "connection_env",
+                if present {
+                    DoctorStatus::Ok
+                } else if config.database.connection_string.is_some() {
+                    DoctorStatus::Warning
+                } else {
+                    DoctorStatus::Error
+                },
+                if present {
+                    format!("Environment variable {env_name} is set")
+                } else {
+                    format!("Environment variable {env_name} is not set")
+                },
+                (!present && config.database.connection_string.is_none())
+                    .then_some(format!("set {env_name} or database.connectionString")),
+            );
+        }
+        push_check(
+            &mut checks,
+            "mcp",
+            if config.mcp.enabled {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warning
+            },
+            if config.mcp.enabled {
+                format!(
+                    "MCP enabled with maxResponseChars={}",
+                    config.mcp.max_response_chars
+                )
+            } else {
+                "MCP disabled in config".to_owned()
+            },
+            (!config.mcp.enabled).then_some("enable mcp.enabled in dbgraph.config.json".to_owned()),
+        );
+        if check_db {
+            checks.push(check_database_connection(config));
+        }
+    }
+
+    let snapshots = snapshot_files(&context)?;
+    push_check(
+        &mut checks,
+        "snapshots",
+        if snapshots.is_empty() {
+            DoctorStatus::Warning
+        } else {
+            DoctorStatus::Ok
+        },
+        if snapshots.is_empty() {
+            "No snapshots found".to_owned()
+        } else {
+            format!("{} snapshot(s) found", snapshots.len())
+        },
+        snapshots
+            .is_empty()
+            .then_some("dbgraph snapshot --profile stats".to_owned()),
+    );
+    push_check(
+        &mut checks,
+        "graph_index",
+        if context.graph_db_path().is_file() {
+            DoctorStatus::Ok
+        } else {
+            DoctorStatus::Warning
+        },
+        if context.graph_db_path().is_file() {
+            format!("Graph index exists: {}", context.graph_db_path().display())
+        } else {
+            "Graph index is missing".to_owned()
+        },
+        (!context.graph_db_path().is_file())
+            .then_some("dbgraph snapshot --profile stats".to_owned()),
+    );
+    let sql_artifact_count = latest_snapshot(&context).ok().map_or(0, |snapshot| {
+        snapshot
+            .objects
+            .iter()
+            .filter(|object| object.kind == DbObjectKind::Query)
+            .count()
+    });
+    push_check(
+        &mut checks,
+        "sql_artifacts",
+        DoctorStatus::Ok,
+        format!("{sql_artifact_count} SQL artifact(s) in latest snapshot"),
+        None::<String>,
+    );
+    let path_visible = command_visible_on_path("dbgraph");
+    push_check(
+        &mut checks,
+        "path",
+        if path_visible {
+            DoctorStatus::Ok
+        } else {
+            DoctorStatus::Warning
+        },
+        if path_visible {
+            "`dbgraph` is visible on PATH".to_owned()
+        } else {
+            "`dbgraph` was not found on PATH".to_owned()
+        },
+        (!path_visible).then_some("install dbgraph or add it to PATH".to_owned()),
+    );
+
+    let status = checks
+        .iter()
+        .map(|check| check.status)
+        .max_by_key(|status| status.rank())
+        .unwrap_or(DoctorStatus::Ok);
+    let mut suggested_next_commands = checks
+        .iter()
+        .filter_map(|check| check.suggestion.clone())
+        .filter(|suggestion| suggestion.starts_with("dbgraph "))
+        .collect::<Vec<_>>();
+    suggested_next_commands.sort();
+    suggested_next_commands.dedup();
+    if context.config_path().is_file()
+        && !suggested_next_commands.contains(&"dbgraph install --target codex --yes".to_owned())
+    {
+        suggested_next_commands.push("dbgraph install --target codex --yes".to_owned());
+    }
+    Ok(DoctorReport {
+        status,
+        project_root: context.project_root().to_path_buf(),
+        checks,
+        suggested_next_commands,
+    })
+}
+
+fn push_check(
+    checks: &mut Vec<DoctorCheck>,
+    id: &str,
+    status: DoctorStatus,
+    message: String,
+    suggestion: Option<String>,
+) {
+    checks.push(DoctorCheck {
+        id: id.to_owned(),
+        status,
+        message,
+        suggestion,
+    });
+}
+
+fn check_database_connection(config: &DbGraphConfig) -> DoctorCheck {
+    let Some(provider) = ProviderRegistry.get(&config.database.provider) else {
+        return DoctorCheck {
+            id: "database_connection".to_owned(),
+            status: DoctorStatus::Error,
+            message: format!("Unknown provider {}", config.database.provider),
+            suggestion: Some("choose a supported database.provider".to_owned()),
+        };
+    };
+    match resolve_connection_url(&config.database)
+        .map(ProviderConnectionConfig::from_url)
+        .and_then(|connection| provider.connect(&connection))
+    {
+        Ok(info) => DoctorCheck {
+            id: "database_connection".to_owned(),
+            status: DoctorStatus::Ok,
+            message: format!(
+                "Connected to {} as {}",
+                info.database_name, info.current_user
+            ),
+            suggestion: None,
+        },
+        Err(err) => DoctorCheck {
+            id: "database_connection".to_owned(),
+            status: DoctorStatus::Error,
+            message: err.to_string(),
+            suggestion: Some("verify database connection settings".to_owned()),
+        },
+    }
+}
+
+fn command_visible_on_path(command: &str) -> bool {
+    let Some(paths) = env::var_os("PATH") else {
+        return false;
+    };
+    env::split_paths(&paths).any(|path| {
+        let candidate = path.join(command);
+        candidate.is_file() || candidate.with_extension("exe").is_file()
+    })
+}
+
+fn print_doctor_report(report: &DoctorReport) {
+    println!("DbGraph doctor: {:?}", report.status);
+    println!("Project: {}", report.project_root.display());
+    for check in &report.checks {
+        println!("- {:?} {}: {}", check.status, check.id, check.message);
+        if let Some(suggestion) = &check.suggestion {
+            println!("  suggestion: {suggestion}");
+        }
+    }
+    if !report.suggested_next_commands.is_empty() {
+        println!("Suggested next commands:");
+        for command in &report.suggested_next_commands {
+            println!("- {command}");
+        }
+    }
+}
+
 fn print_error(err: &DbGraphError) {
     eprintln!("error: {err}");
     eprintln!("Run `dbgraph --help` for usage.");
@@ -2636,9 +3862,11 @@ DbGraph
 Usage:
   dbgraph [OPTIONS] init [PATH] [--force] [-i|--interactive] [--yes]
   dbgraph [OPTIONS] status [PATH] [--json]
+  dbgraph [OPTIONS] doctor [PATH] [--json] [--check-db]
   dbgraph [OPTIONS] snapshot [PATH] [--profile schema|stats|sample] [--max-rows-per-table N] [--store-raw-samples] [--json]
   dbgraph [OPTIONS] sync [PATH] [--json]
   dbgraph [OPTIONS] benchmark [--tables N] [--columns-per-table N] [--json]
+  dbgraph [OPTIONS] benchmark-agent [PATH] --scenario teashop [--format text|json|markdown] [--output FILE]
   dbgraph [OPTIONS] validate-sql [PATH] (--sql SQL | --file FILE) [--dialect postgres|mysql|generic] [--json]
   dbgraph [OPTIONS] search [PATH] QUERY [--kind KIND] [--json]
   dbgraph [OPTIONS] table [PATH] TABLE [--json]
@@ -2646,7 +3874,7 @@ Usage:
   dbgraph [OPTIONS] context [PATH] QUERY [--tokens N] [--json]
   dbgraph [OPTIONS] diff [PATH] [--json]
   dbgraph [OPTIONS] impact [PATH] OBJECT [--depth 1|2] [--json]
-  dbgraph [OPTIONS] analyze [PATH] [--scope all|risk|quality|performance] [--format text|json|markdown] [--output FILE] [--json]
+  dbgraph [OPTIONS] analyze [PATH] [--scope all|risk|quality|performance] [--format text|json|markdown] [--output FILE] [--json] [--include-suppressed] [--suppressions FILE] [--fail-on SEVERITY] [--fail-on-new SEVERITY] [--baseline FILE]
   dbgraph [OPTIONS] install [--target codex,cursor,claude] [--location DIR] [--yes] [--dry-run] [--print-config]
   dbgraph [OPTIONS] uninstall [--target codex,cursor,claude] [--location DIR] [--dry-run]
   dbgraph [OPTIONS] serve --mcp
@@ -2666,9 +3894,11 @@ Options:
 Commands:
   init       Initialize .dbgraph project state
   status     Show local project status
+  doctor     Diagnose onboarding, config, snapshot, graph, PATH, and optional DB connectivity
   snapshot   Capture database schema into JSON and local SQLite index
   sync       Capture and compare schema hashes for incremental sync
   benchmark  Generate a synthetic schema benchmark report
+  benchmark-agent Generate an offline agent value benchmark
   validate-sql Parse SQL and validate references against the local graph index
   search     Search schema and SQL graph objects
   table      Show table columns, constraints, profile, and relations
@@ -2785,7 +4015,19 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn parses_phase09_snapshot_sync_and_benchmark_commands() {
+        let doctor = parse(&["doctor", "sample-project", "--json", "--check-db"])
+            .expect("doctor args should parse");
+        assert_eq!(
+            doctor.command,
+            Command::Doctor {
+                path: Some(PathBuf::from("sample-project")),
+                json: true,
+                check_db: true,
+            }
+        );
+
         let snapshot = parse(&[
             "snapshot",
             "--profile",
@@ -2837,6 +4079,11 @@ mod tests {
                 json: true,
                 format: AnalysisOutputFormat::Json,
                 output: None,
+                include_suppressed: false,
+                suppressions: None,
+                fail_on: None,
+                fail_on_new: None,
+                baseline: None,
             }
         );
 
@@ -2859,6 +4106,61 @@ mod tests {
                 json: false,
                 format: AnalysisOutputFormat::Markdown,
                 output: Some(PathBuf::from("report.md")),
+                include_suppressed: false,
+                suppressions: None,
+                fail_on: None,
+                fail_on_new: None,
+                baseline: None,
+            }
+        );
+
+        let gated = parse(&[
+            "analyze",
+            "--fail-on",
+            "high",
+            "--fail-on-new",
+            "medium",
+            "--baseline",
+            "baseline.json",
+            "--include-suppressed",
+            "--suppressions",
+            "suppressions.json",
+        ])
+        .expect("gated analyze args should parse");
+        assert_eq!(
+            gated.command,
+            Command::Analyze {
+                path: None,
+                scope: AnalysisScope::All,
+                json: false,
+                format: AnalysisOutputFormat::Text,
+                output: None,
+                include_suppressed: true,
+                suppressions: Some(PathBuf::from("suppressions.json")),
+                fail_on: Some(FindingSeverity::High),
+                fail_on_new: Some(FindingSeverity::Medium),
+                baseline: Some(PathBuf::from("baseline.json")),
+            }
+        );
+
+        let agent_benchmark = parse(&[
+            "benchmark-agent",
+            "sample-project",
+            "--scenario",
+            "teashop",
+            "--format",
+            "markdown",
+            "--output",
+            "benchmark.md",
+        ])
+        .expect("agent benchmark args should parse");
+        assert_eq!(
+            agent_benchmark.command,
+            Command::BenchmarkAgent {
+                path: Some(PathBuf::from("sample-project")),
+                scenario: "teashop".to_owned(),
+                format: AgentBenchmarkFormat::Markdown,
+                output: Some(PathBuf::from("benchmark.md")),
             }
         );
     }
@@ -3250,6 +4552,125 @@ mod tests {
             .findings
             .iter()
             .all(|finding| finding.scope == AnalysisScope::Quality));
+    }
+
+    #[test]
+    fn analyze_suppresses_exact_active_findings_and_marks_gate() {
+        let temp = TempProject::new();
+        init_project(&temp.root, false, &InitOptions::default()).expect("init should succeed");
+        let snapshot = sample_phase05_snapshot("s1", 1);
+        write_latest_snapshot_with_index(&temp.root, &snapshot);
+        let suppression_path = ProjectContext::from_project_root(&temp.root)
+            .dbgraph_dir()
+            .join("suppressions.json");
+        fs::write(
+            &suppression_path,
+            r#"{
+              "version": 1,
+              "suppressions": [
+                {
+                  "ruleId": "quality.missing_primary_key",
+                  "object": "public.orders",
+                  "reason": "legacy fixture",
+                  "owner": "data-platform",
+                  "expiresAt": "2999-12-31"
+                },
+                {
+                  "ruleId": "quality.missing_primary_key",
+                  "object": "public.payments",
+                  "reason": "expired fixture",
+                  "owner": "data-platform",
+                  "expiresAt": "1970-01-01"
+                }
+              ]
+            }"#,
+        )
+        .expect("suppression file should write");
+
+        let report = analyze_project_with_options(
+            &temp.root,
+            &AnalysisCliOptions {
+                scope: AnalysisScope::Quality,
+                include_suppressed: false,
+                suppressions: Some(suppression_path),
+                fail_on: Some(FindingSeverity::Medium),
+                fail_on_new: None,
+                baseline: None,
+            },
+        )
+        .expect("analysis should run");
+
+        assert!(!report.findings.iter().any(|finding| {
+            finding.rule_id == "quality.missing_primary_key" && finding.object == "public.orders"
+        }));
+        assert!(report.suppressed_findings.iter().any(|finding| {
+            finding.rule_id == "quality.missing_primary_key" && finding.object == "public.orders"
+        }));
+        assert!(report.findings.iter().any(|finding| {
+            finding.rule_id == "quality.missing_primary_key" && finding.object == "public.payments"
+        }));
+        assert!(report
+            .gate
+            .as_ref()
+            .is_some_and(|gate| !gate.passed && gate.threshold.as_deref() == Some("medium")));
+    }
+
+    #[test]
+    fn doctor_reports_missing_and_initialized_project_state() {
+        let temp = TempProject::new();
+        fs::create_dir_all(&temp.root).expect("temp root should exist");
+
+        let missing = doctor_project(&temp.root, false).expect("doctor should not fail hard");
+        assert_eq!(missing.status, DoctorStatus::Error);
+        assert!(missing
+            .suggested_next_commands
+            .contains(&"dbgraph init -i --yes".to_owned()));
+
+        init_project(&temp.root, false, &InitOptions::default()).expect("init should succeed");
+        let initialized = doctor_project(&temp.root, false).expect("doctor should inspect project");
+        assert!(initialized
+            .checks
+            .iter()
+            .any(|check| check.id == "config" && check.status == DoctorStatus::Ok));
+        assert!(initialized
+            .checks
+            .iter()
+            .any(|check| check.id == "graph_index" && check.status == DoctorStatus::Warning));
+    }
+
+    #[test]
+    fn benchmark_agent_computes_metrics_from_snapshot_and_project_files() {
+        let temp = TempProject::new();
+        init_project(&temp.root, false, &InitOptions::default()).expect("init should succeed");
+        fs::create_dir_all(temp.root.join("sql")).expect("sql dir should exist");
+        fs::write(
+            temp.root.join("schema.sql"),
+            "CREATE TABLE customers (id bigint primary key, email text);",
+        )
+        .expect("schema should write");
+        fs::write(
+            temp.root.join("sql").join("orders.sql"),
+            "SELECT o.status, c.email FROM orders o JOIN customers c ON c.id = o.customer_id;",
+        )
+        .expect("sql should write");
+        let snapshot = sample_phase05_snapshot("s1", 1);
+        write_latest_snapshot_with_index(&temp.root, &snapshot);
+
+        let report = benchmark_agent_project(
+            &temp.root,
+            AgentBenchmarkOptions {
+                scenario: "teashop".to_owned(),
+            },
+        )
+        .expect("benchmark should run");
+
+        assert_eq!(report.scenario, "teashop");
+        assert!(report.summary.dbgraph_estimated_tokens > 0);
+        assert!(report.summary.baseline_estimated_tokens > 0);
+        assert!(report.cases.iter().any(|case| case
+            .expected_objects
+            .contains(&"public.orders.status".to_owned())));
+        assert!(report.summary.evidence_recall_delta >= 0.0);
     }
 
     #[test]

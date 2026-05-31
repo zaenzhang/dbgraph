@@ -1,3 +1,8 @@
+---
+title: 中文使用说明
+description: DbGraph 中文完整使用流程、配置、常用命令和安全说明。
+---
+
 # DbGraph 使用说明
 
 DbGraph 是一个本地优先的数据库上下文工具。典型使用流程是：
@@ -9,7 +14,7 @@ DbGraph 是一个本地优先的数据库上下文工具。典型使用流程是
 
 DbGraph 默认保存的是 schema 元数据、SQL artifact、图关系和 profile 摘要。`validate-sql` 不会执行 SQL，默认也不会保存业务行数据。
 
-完整 `.dbgraph/dbgraph.config.json` 字段说明见 [configuration.md](configuration.md)。
+完整 `.dbgraph/dbgraph.config.json` 字段说明见 [configuration.md](/dbgraph/configuration/)。
 
 ## 安装或直接运行
 
@@ -280,7 +285,7 @@ dbgraph benchmark-agent --scenario teashop --format markdown --output dbgraph-ag
 dbgraph benchmark-agent --scenario teashop --format json
 ```
 
-报告包含 estimated tokens、retrieval steps、evidence recall、precision 和 token reduction。英文方法说明见 [agent-benchmark.md](agent-benchmark.md)。
+报告包含 estimated tokens、retrieval steps、evidence recall、precision 和 token reduction。英文方法说明见 [agent-benchmark.md](/dbgraph/agent-benchmark/)。
 
 ## MCP Server
 

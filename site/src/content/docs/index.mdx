@@ -1,0 +1,61 @@
+---
+title: DbGraph
+description: Local-first database context for AI coding agents.
+template: splash
+hero:
+  tagline: Build a local graph of schema objects, SQL artifacts, and relationships so agents can search, validate, analyze, and reason about database changes without storing business row data by default.
+  actions:
+    - text: Start with Quickstart
+      link: /quickstart/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/zaenzhang/dbgraph
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <Card title="Local-first snapshots" icon="database">
+    Capture PostgreSQL and SQLite metadata into `.dbgraph/` with safe defaults and no raw row storage by default.
+  </Card>
+  <Card title="Agent-ready context" icon="seti:graphql">
+    Search, inspect, traverse, validate SQL, and expose compact MCP context for database-aware coding agents.
+  </Card>
+  <Card title="Structured review reports" icon="document">
+    Report security, data quality, SQL workload, and performance findings with evidence, confidence, and suggested fixes.
+  </Card>
+  <Card title="CI and benchmark support" icon="rocket">
+    Use suppressions, gates, and offline context benchmarks to make DbGraph measurable in real project workflows.
+  </Card>
+</CardGrid>
+
+## Quick Path
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zaenzhang/dbgraph/master/install.sh | sh
+cd your-project
+dbgraph init -i --yes
+dbgraph doctor
+dbgraph snapshot --profile stats
+dbgraph analyze --scope all --format markdown --output dbgraph-analysis.md
+```
+
+## Current Teashop Benchmark
+
+<div class="card-grid">
+  <div class="metric-card">
+    <strong>67,326</strong>
+    Baseline estimated tokens
+  </div>
+  <div class="metric-card">
+    <strong>6,324</strong>
+    DbGraph estimated tokens
+  </div>
+  <div class="metric-card">
+    <strong>-90.6%</strong>
+    Offline context token reduction
+  </div>
+</div>
+
+The benchmark is deterministic and offline. It does not call an LLM or measure provider billing tokens.

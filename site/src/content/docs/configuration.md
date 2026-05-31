@@ -1,3 +1,8 @@
+---
+title: Project Configuration
+description: DbGraph project config, provider settings, security defaults, MCP, and suppressions.
+---
+
 # DbGraph Project Configuration
 
 DbGraph reads project configuration from:

@@ -1,0 +1,61 @@
+---
+title: DbGraph
+description: 面向 AI Coding Agent 的本地优先数据库上下文工具。
+template: splash
+hero:
+  tagline: 把数据库 schema、SQL artifact 和关系整理成本地图谱，让 Agent 可以搜索、校验、分析影响和生成审查报告，默认不存储业务行数据。
+  actions:
+    - text: 阅读中文指南
+      link: /zh/usage/
+      icon: right-arrow
+    - text: GitHub
+      link: https://github.com/zaenzhang/dbgraph
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <Card title="本地优先快照" icon="database">
+    将 PostgreSQL 和 SQLite 元数据捕获到 `.dbgraph/`，默认不存储原始业务行数据。
+  </Card>
+  <Card title="面向 Agent 的上下文" icon="seti:graphql">
+    支持 search、table、relations、impact、validate-sql、analyze 和 MCP 上下文工具。
+  </Card>
+  <Card title="结构化审查报告" icon="document">
+    按安全、质量、SQL 工作负载和性能输出 findings、证据、置信度和建议修复方式。
+  </Card>
+  <Card title="可验证价值" icon="rocket">
+    支持 suppressions、CI gate 和离线 benchmark，方便在真实项目中衡量价值。
+  </Card>
+</CardGrid>
+
+## 快速路径
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zaenzhang/dbgraph/master/install.sh | sh
+cd your-project
+dbgraph init -i --yes
+dbgraph doctor
+dbgraph snapshot --profile stats
+dbgraph analyze --scope all --format markdown --output dbgraph-analysis.md
+```
+
+## 当前 Teashop Benchmark
+
+<div class="card-grid">
+  <div class="metric-card">
+    <strong>67,326</strong>
+    Baseline estimated tokens
+  </div>
+  <div class="metric-card">
+    <strong>6,324</strong>
+    DbGraph estimated tokens
+  </div>
+  <div class="metric-card">
+    <strong>-90.6%</strong>
+    离线上下文 token reduction
+  </div>
+</div>
+
+这是 deterministic offline benchmark，不调用 LLM，也不代表真实 provider billing token。

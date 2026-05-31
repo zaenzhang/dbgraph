@@ -1,3 +1,8 @@
+---
+title: Usage Guide
+description: Complete DbGraph CLI, provider, analysis, and MCP workflow.
+---
+
 # DbGraph Usage Guide
 
 DbGraph is a local-first database context tool. The normal workflow is:
@@ -9,7 +14,7 @@ DbGraph is a local-first database context tool. The normal workflow is:
 
 DbGraph stores schema metadata, SQL artifacts, graph edges, and profile summaries. It does not execute SQL during validation, and it does not store business row data by default.
 
-For the full `.dbgraph/dbgraph.config.json` reference, see [configuration.md](configuration.md).
+For the full `.dbgraph/dbgraph.config.json` reference, see [configuration.md](configuration).
 
 ## Install Or Run
 
@@ -279,7 +284,7 @@ dbgraph benchmark-agent --scenario teashop --format markdown --output dbgraph-ag
 dbgraph benchmark-agent --scenario teashop --format json
 ```
 
-The benchmark reports estimated tokens, retrieval steps, evidence recall, relevant object precision, and token reduction. See [agent-benchmark.md](agent-benchmark.md).
+The benchmark reports estimated tokens, retrieval steps, evidence recall, relevant object precision, and token reduction. See [agent-benchmark.md](agent-benchmark).
 
 ## MCP Server
 

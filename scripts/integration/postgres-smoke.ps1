@@ -8,6 +8,7 @@ $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("dbgraph-postgres-smoke-" + [System.Guid]::NewGuid())
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 Copy-Item -Recurse -Path (Join-Path $root "examples/postgres-teashop/sql") -Destination (Join-Path $work "sql")
+Copy-Item -Path (Join-Path $root "examples/postgres-teashop/schema.sql") -Destination (Join-Path $work "schema.sql")
 
 function Invoke-DbGraphCli {
   param([string[]]$Arguments)
@@ -23,9 +24,12 @@ function Invoke-DbGraphCli {
 try {
   Push-Location $work
   Invoke-DbGraphCli @("init", "-i", "--yes") | Out-Null
+  Invoke-DbGraphCli @("doctor") | Out-Null
   Invoke-DbGraphCli @("snapshot", "--profile", "stats") | Out-Null
+  Invoke-DbGraphCli @("doctor", "--check-db") | Out-Null
   Invoke-DbGraphCli @("search", "orders", "--kind", "table") | Out-Null
   Invoke-DbGraphCli @("validate-sql", "--sql", "select * from orders") | Out-Null
+  Invoke-DbGraphCli @("analyze", "--fail-on", "critical") | Out-Null
   $analysis = Invoke-DbGraphCli @("analyze", "--scope", "all", "--json")
   if ($analysis -notmatch "public\.customers\.email") {
     throw "analysis smoke missing expected customer email risk"
@@ -38,6 +42,19 @@ try {
   }
   if ($analysis -notmatch "suggestedFix") {
     throw "analysis smoke missing suggested fixes"
+  }
+  $benchmark = Invoke-DbGraphCli @("benchmark-agent", "--scenario", "teashop", "--format", "markdown")
+  if ($benchmark -notmatch "public\.customers\.email") {
+    throw "benchmark smoke missing expected customer email evidence"
+  }
+  if ($benchmark -notmatch "public\.payments\.provider_token") {
+    throw "benchmark smoke missing expected provider token evidence"
+  }
+  if ($benchmark -notmatch "public\.orders\.status") {
+    throw "benchmark smoke missing expected orders status evidence"
+  }
+  if ($benchmark -notmatch "Token reduction") {
+    throw "benchmark smoke missing token reduction summary"
   }
 }
 finally {

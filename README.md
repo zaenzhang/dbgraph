@@ -21,6 +21,7 @@ Build a local graph of database schema objects, SQL artifacts, and relationships
 | [Website](https://zaenzhang.github.io/dbgraph/) | GitHub Pages site with quickstart and docs. |
 | [English Usage Guide](docs/usage.md) | Complete workflow, provider setup, CLI usage, MCP, and smoke tests. |
 | [Project Configuration](docs/configuration.md) | `.dbgraph/dbgraph.config.json` fields, provider examples, security, and MCP settings. |
+| [Agent Benchmark](docs/agent-benchmark.md) | Offline methodology for comparing raw-project context with DbGraph context. |
 | [中文使用说明](docs/usage.zh-CN.md) | 中文完整使用流程、配置、常用命令和安全说明。 |
 | [Quickstart](docs/quickstart.md) | Short path for getting a project initialized and indexed. |
 
@@ -120,6 +121,7 @@ dbgraph install --target codex --yes
 | Step | Command |
 | --- | --- |
 | Initialize project | `dbgraph init -i --yes` |
+| Diagnose setup | `dbgraph doctor --json` |
 | Configure agent MCP | `dbgraph install --target codex --yes` |
 | Capture snapshot | `dbgraph snapshot --profile stats` |
 | Search graph | `dbgraph search orders --kind table` |
@@ -175,6 +177,37 @@ Example:
 dbgraph analyze --scope all --format markdown --output dbgraph-analysis.md
 ```
 
+For CI gates and known-risk management:
+
+```bash
+dbgraph analyze --fail-on high
+dbgraph analyze --fail-on-new medium --baseline .dbgraph/analysis-baseline.json
+dbgraph analyze --include-suppressed --suppressions .dbgraph/suppressions.json
+```
+
+Suppressed findings are matched by `ruleId` and `object`, retained in `suppressedFindings`, and excluded from active `findings` by default.
+
+### Agent Value Benchmark
+
+`benchmark-agent` estimates the context cost and evidence coverage difference between raw project materials and DbGraph structured context. It is offline and deterministic; it does not call an LLM.
+
+```bash
+dbgraph benchmark-agent --scenario teashop --format markdown --output dbgraph-agent-benchmark.md
+```
+
+Latest teashop smoke benchmark:
+
+| Metric | Baseline | DbGraph | Delta |
+| --- | ---: | ---: | ---: |
+| Estimated tokens | 67,326 | 6,324 | -90.6% |
+| Retrieval steps | 12 | 12 | 0 |
+| Evidence recall | baseline | +0.17 | +0.17 |
+| Relevant object precision | baseline | +0.07 | +0.07 |
+
+This is an offline context benchmark, not a live LLM billing measurement.
+
+See [docs/agent-benchmark.md](docs/agent-benchmark.md) for methodology and limitations.
+
 ## CLI Reference
 
 ```bash
@@ -182,9 +215,11 @@ dbgraph --version
 dbgraph --help
 dbgraph init [PATH] [--force] [-i|--interactive] [--yes]
 dbgraph status [PATH] [--json]
+dbgraph doctor [PATH] [--json] [--check-db]
 dbgraph snapshot [PATH] [--profile schema|stats|sample] [--max-rows-per-table N] [--store-raw-samples] [--json]
 dbgraph sync [PATH] [--json]
 dbgraph benchmark [--tables N] [--columns-per-table N] [--json]
+dbgraph benchmark-agent [PATH] --scenario teashop [--format text|json|markdown] [--output FILE]
 dbgraph validate-sql [PATH] (--sql SQL | --file FILE) [--dialect postgres|mysql|generic] [--json]
 dbgraph search [PATH] QUERY [--kind KIND] [--json]
 dbgraph table [PATH] TABLE [--json]
@@ -192,7 +227,7 @@ dbgraph relations [PATH] OBJECT [--depth 1|2] [--direction incoming|outgoing|bot
 dbgraph context [PATH] QUERY [--tokens N] [--json]
 dbgraph diff [PATH] [--json]
 dbgraph impact [PATH] OBJECT [--depth 1|2] [--json]
-dbgraph analyze [PATH] [--scope all|risk|quality|performance] [--format text|json|markdown] [--output FILE] [--json]
+dbgraph analyze [PATH] [--scope all|risk|quality|performance] [--format text|json|markdown] [--output FILE] [--json] [--include-suppressed] [--suppressions FILE] [--fail-on SEVERITY] [--fail-on-new SEVERITY] [--baseline FILE]
 dbgraph install [--target codex,cursor,claude] [--location DIR] [--yes] [--dry-run] [--print-config]
 dbgraph uninstall [--target codex,cursor,claude] [--location DIR] [--dry-run]
 dbgraph serve --mcp
