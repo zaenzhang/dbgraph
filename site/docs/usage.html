@@ -22,6 +22,7 @@
         <aside class="docs-sidebar" aria-label="Documentation">
           <a href="quickstart.html">Quickstart</a>
           <a href="usage.html">Usage Guide</a>
+          <a href="configuration.html">Configuration</a>
           <a href="usage-zh.html">中文说明</a>
           <a href="providers.html">Provider Capabilities</a>
           <a href="security.html">Security</a>
@@ -33,6 +34,10 @@
             DbGraph is a local-first database context tool. The normal workflow is: initialize a
             project, configure a provider, capture a snapshot, then use the local graph for search,
             validation, impact analysis, and review reports.
+          </p>
+          <p>
+            For all <code>.dbgraph/dbgraph.config.json</code> fields, see the
+            <a href="configuration.html">configuration reference</a>.
           </p>
 
           <h2>Install or run</h2>
@@ -52,6 +57,10 @@ dbgraph status</code></pre>
           </p>
 
           <h2>Configure a database</h2>
+          <p>
+            Project config has four top-level sections: <code>database</code>,
+            <code>snapshot</code>, <code>security</code>, and <code>mcp</code>.
+          </p>
           <h3>PostgreSQL</h3>
           <pre><code>$env:DATABASE_URL="postgres://postgres:postgres@localhost:55432/teashop"
 dbgraph snapshot --profile stats</code></pre>

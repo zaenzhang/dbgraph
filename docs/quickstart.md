@@ -3,6 +3,7 @@
 Get DbGraph running in a project in seconds. The recommended path is a small installer that downloads a prebuilt CLI binary, puts `dbgraph` on your `PATH`, initializes local `.dbgraph/` state, and writes MCP configuration for your coding agent.
 
 For the complete workflow, see [usage.md](usage.md).
+For project config fields, see [configuration.md](configuration.md).
 中文完整说明见 [usage.zh-CN.md](usage.zh-CN.md)。
 
 ## Recommended: Install The CLI

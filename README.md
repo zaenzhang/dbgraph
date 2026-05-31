@@ -20,6 +20,7 @@ Build a local graph of database schema objects, SQL artifacts, and relationships
 | --- | --- |
 | [Website](https://zhangsanfenggithub.github.io/dbgraph/) | GitHub Pages site with quickstart and docs. |
 | [English Usage Guide](docs/usage.md) | Complete workflow, provider setup, CLI usage, MCP, and smoke tests. |
+| [Project Configuration](docs/configuration.md) | `.dbgraph/dbgraph.config.json` fields, provider examples, security, and MCP settings. |
 | [中文使用说明](docs/usage.zh-CN.md) | 中文完整使用流程、配置、常用命令和安全说明。 |
 | [Quickstart](docs/quickstart.md) | Short path for getting a project initialized and indexed. |
 

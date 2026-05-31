@@ -9,6 +9,8 @@ DbGraph 是一个本地优先的数据库上下文工具。典型使用流程是
 
 DbGraph 默认保存的是 schema 元数据、SQL artifact、图关系和 profile 摘要。`validate-sql` 不会执行 SQL，默认也不会保存业务行数据。
 
+完整 `.dbgraph/dbgraph.config.json` 字段说明见 [configuration.md](configuration.md)。
+
 ## 安装或直接运行
 
 推荐方式是不依赖 Node.js，也不需要本机安装 Rust toolchain，直接下载对应系统的 release 二进制：
@@ -86,6 +88,13 @@ dbgraph status --json
 ## 配置数据库
 
 DbGraph 从 `.dbgraph/dbgraph.config.json` 读取配置。
+
+配置文件有四个顶层部分：
+
+- `database`：provider 和连接来源。
+- `snapshot`：JSON 输出、profile 深度和采样限制。
+- `security`：原始数据存储、采样 mask 和自定义敏感词。
+- `mcp`：MCP 开关和响应大小预算。
 
 ### PostgreSQL
 

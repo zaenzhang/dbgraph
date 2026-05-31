@@ -9,6 +9,8 @@ DbGraph is a local-first database context tool. The normal workflow is:
 
 DbGraph stores schema metadata, SQL artifacts, graph edges, and profile summaries. It does not execute SQL during validation, and it does not store business row data by default.
 
+For the full `.dbgraph/dbgraph.config.json` reference, see [configuration.md](configuration.md).
+
 ## Install Or Run
 
 Recommended path. No Node.js or local Rust toolchain is required:
@@ -86,6 +88,13 @@ dbgraph status --json
 ## Configure A Database
 
 DbGraph reads configuration from `.dbgraph/dbgraph.config.json`.
+
+The config has four top-level sections:
+
+- `database`: provider and connection source.
+- `snapshot`: JSON formatting, profiling depth, and sample limits.
+- `security`: raw-data storage, sample masking, and custom sensitive terms.
+- `mcp`: MCP enablement and response budget.
 
 ### PostgreSQL
 
