@@ -139,6 +139,11 @@ pub fn is_dbgraph_dir(path: impl AsRef<Path>) -> bool {
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if raw.contains('\\') && path.components().count() <= 1 {
+        return normalize_backslash_path(&raw);
+    }
+
     let mut normalized = PathBuf::new();
 
     for component in path.components() {
@@ -157,6 +162,67 @@ fn normalize_path(path: &Path) -> PathBuf {
         PathBuf::from(".")
     } else {
         normalized
+    }
+}
+
+fn normalize_backslash_path(raw: &str) -> PathBuf {
+    let path = raw.replace('\\', "/");
+    let mut prefix = String::new();
+    let mut absolute = false;
+    let mut remainder = path.as_str();
+
+    if let Some(without_slashes) = path.strip_prefix("//") {
+        let mut segments = without_slashes.splitn(3, '/');
+        let server = segments.next().unwrap_or_default();
+        let share = segments.next().unwrap_or_default();
+        if !server.is_empty() && !share.is_empty() {
+            prefix = format!("//{server}/{share}");
+            absolute = true;
+            remainder = segments.next().unwrap_or_default();
+        }
+    } else if path.len() >= 2 && path.as_bytes()[1] == b':' {
+        path[..2].clone_into(&mut prefix);
+        remainder = &path[2..];
+        if let Some(stripped) = remainder.strip_prefix('/') {
+            absolute = true;
+            remainder = stripped;
+        }
+    } else if let Some(stripped) = path.strip_prefix('/') {
+        absolute = true;
+        remainder = stripped;
+    }
+
+    let mut parts = Vec::new();
+    for part in remainder.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.last().is_some_and(|previous| *previous != "..") {
+                    parts.pop();
+                } else if !absolute {
+                    parts.push(part);
+                }
+            }
+            _ => parts.push(part),
+        }
+    }
+
+    let mut rendered = String::new();
+    if !prefix.is_empty() {
+        rendered.push_str(&prefix);
+        if absolute {
+            rendered.push('/');
+        }
+    } else if absolute {
+        rendered.push('/');
+    }
+
+    rendered.push_str(&parts.join("/"));
+
+    if rendered.is_empty() {
+        PathBuf::from(".")
+    } else {
+        PathBuf::from(rendered)
     }
 }
 
@@ -230,6 +296,15 @@ mod tests {
         let rendered = context.config_path().to_string_lossy().replace('\\', "/");
 
         assert!(rendered.contains("C:/Users/dev/dbgraph/.dbgraph/dbgraph.config.json"));
+    }
+
+    #[test]
+    fn windows_unc_paths_preserve_share_prefix() {
+        let context =
+            ProjectContext::from_project_root(PathBuf::from(r"\\server\share\project\..\dbgraph"));
+        let rendered = context.project_root().to_string_lossy().replace('\\', "/");
+
+        assert!(rendered.contains("//server/share/dbgraph"));
     }
 
     fn assert_path_ends_with(path: &Path, expected: &[&str]) {
