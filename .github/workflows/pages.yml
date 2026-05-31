@@ -1,13 +1,6 @@
 name: pages
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - "site/**"
-      - "docs/**"
-      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
