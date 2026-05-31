@@ -205,6 +205,36 @@ dbgraph analyze --format markdown
 
 `analyze` adds a `Data Profiling & Business Rules` section when allowlisted sample summaries reveal enum-like unconstrained values, high null rates, negative metric-like values, or unstable identifier formats.
 
+### Semantic Metadata
+
+Use `.dbgraph/semantics.json` to add business meaning that is not available from schema metadata:
+
+```json
+{
+  "version": 1,
+  "objects": [
+    {
+      "object": "public.orders.status",
+      "description": "Order lifecycle state",
+      "owner": "commerce",
+      "allowedValues": ["pending", "paid", "shipped", "cancelled"],
+      "deprecated": false,
+      "certified": true
+    }
+  ]
+}
+```
+
+Then refresh the snapshot:
+
+```powershell
+dbgraph snapshot
+dbgraph context "order status"
+dbgraph analyze --scope quality
+```
+
+`context` and MCP context responses include semantic metadata. If a SQL artifact references an object marked `deprecated: true`, `analyze` reports `quality.deprecated_object_used`.
+
 ## SQL Artifacts
 
 During snapshot, DbGraph scans SQL files under these directories by default:

@@ -189,6 +189,59 @@ Validation rules:
 
 Supported patterns are exact table names such as `public.orders` and simple `*` wildcards such as `public.audit_*`.
 
+## Semantic Metadata
+
+Use `.dbgraph/semantics.json` for project-owned business meaning that does not come from the database catalog. This file is optional. When present, `dbgraph snapshot` merges matching entries into object metadata under `semantic`.
+
+Example:
+
+```json
+{
+  "version": 1,
+  "objects": [
+    {
+      "object": "public.orders.status",
+      "description": "Order lifecycle state",
+      "owner": "commerce",
+      "domain": "orders",
+      "sensitivity": "internal",
+      "allowedValues": ["pending", "paid", "shipped", "cancelled"],
+      "replacement": "public.order_events.state",
+      "deprecated": false,
+      "certified": true,
+      "metadata": {
+        "source": "architecture-decision-record-12"
+      }
+    }
+  ]
+}
+```
+
+Fields:
+
+| Field | Meaning |
+| --- | --- |
+| `object` | Object id, name, or fully-qualified name to annotate. |
+| `description` | Business meaning shown in context output. |
+| `owner` | Team or person responsible for the object. |
+| `domain` | Business domain such as orders, billing, or identity. |
+| `sensitivity` | Project-defined sensitivity label. |
+| `allowedValues` | Allowed semantic values for enum-like columns. |
+| `replacement` | Replacement object when this object is deprecated. |
+| `deprecated` | Marks the object as deprecated. SQL references produce a quality finding. |
+| `certified` | Marks the object as preferred or trusted. |
+| `metadata` | Extra project-specific JSON metadata. |
+
+After editing `.dbgraph/semantics.json`, run:
+
+```bash
+dbgraph snapshot
+dbgraph context "order status"
+dbgraph analyze --scope quality
+```
+
+`context` and MCP context responses include the semantic metadata. `analyze` reports `quality.deprecated_object_used` when a SQL artifact references an object marked `deprecated: true`.
+
 ## `mcp`
 
 | Field | Meaning |

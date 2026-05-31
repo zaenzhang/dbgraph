@@ -1323,14 +1323,46 @@ mod tests {
             ..DbGraphConfig::default()
         };
         config.save(&context).expect("sqlite config should save");
+        fs::write(
+            context.semantics_path(),
+            r#"{
+              "version": 1,
+              "objects": [
+                {
+                  "object": "main.users.email",
+                  "description": "Customer contact email",
+                  "owner": "support",
+                  "sensitivity": "personal",
+                  "certified": true
+                }
+              ]
+            }"#,
+        )
+        .expect("semantic metadata should write");
 
         let summary = run_snapshot(&temp.root).expect("sqlite snapshot should run");
+        let stored = SnapshotStore::new(&context)
+            .read_snapshot(&summary.snapshot_path)
+            .expect("snapshot should read");
+        let email = stored
+            .objects
+            .iter()
+            .find(|object| object.full_name == "main.users.email")
+            .expect("email column should exist");
 
         assert_eq!(summary.provider, "sqlite");
         assert_eq!(summary.table_count, 1);
         assert_eq!(summary.column_count, 2);
         assert!(summary.snapshot_path.is_file());
         assert!(summary.graph_db_path.is_file());
+        assert_eq!(
+            email
+                .metadata
+                .get("semantic")
+                .and_then(|value| value.get("description"))
+                .and_then(serde_json::Value::as_str),
+            Some("Customer contact email")
+        );
     }
 
     #[test]

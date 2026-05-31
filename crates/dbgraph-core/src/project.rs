@@ -20,6 +20,9 @@ pub const SNAPSHOTS_DIR_NAME: &str = "snapshots";
 /// Agent instruction directory name inside `.dbgraph`.
 pub const INSTRUCTIONS_DIR_NAME: &str = "instructions";
 
+/// Project semantic metadata file name inside `.dbgraph`.
+pub const SEMANTICS_FILE_NAME: &str = "semantics.json";
+
 /// Project root and derived local `DbGraph` paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectContext {
@@ -99,6 +102,12 @@ impl ProjectContext {
     #[must_use]
     pub fn instructions_dir(&self) -> PathBuf {
         self.dbgraph_dir.join(INSTRUCTIONS_DIR_NAME)
+    }
+
+    /// Returns `.dbgraph/semantics.json`.
+    #[must_use]
+    pub fn semantics_path(&self) -> PathBuf {
+        self.dbgraph_dir.join(SEMANTICS_FILE_NAME)
     }
 }
 

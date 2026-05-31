@@ -9,6 +9,7 @@ pub mod profiling;
 pub mod project;
 pub mod sampling;
 pub mod security;
+pub mod semantics;
 pub mod snapshot;
 pub mod sync;
 
