@@ -9,7 +9,33 @@ DbGraph 是一个本地优先的数据库上下文工具。典型使用流程是
 
 DbGraph 默认保存的是 schema 元数据、SQL artifact、图关系和 profile 摘要。`validate-sql` 不会执行 SQL，默认也不会保存业务行数据。
 
-## 从源码运行
+## 安装或直接运行
+
+不需要 Node.js 时，可以直接下载对应系统的 release 二进制：
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.sh | sh
+```
+
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex
+```
+
+如果已经有 Node.js，可以先直接从 GitHub 运行，不需要手动下载二进制：
+
+```bash
+npx github:zhangsanfenggithub/dbgraph --version
+npx github:zhangsanfenggithub/dbgraph init -i --yes
+```
+
+npm 包正式发布后，可以改用：
+
+```bash
+npx @dbgraph/cli --version
+npm i -g @dbgraph/cli
+```
 
 如果你是在当前仓库里开发或测试，可以用 Cargo 前缀运行：
 
@@ -32,6 +58,16 @@ dbgraph init -i --yes
 ```powershell
 dbgraph init -i --yes
 ```
+
+配置 Agent MCP 时不需要自己打印或复制 JSON，直接运行：
+
+```powershell
+dbgraph install --target codex --yes
+dbgraph install --target cursor --yes
+dbgraph install --target claude --yes
+```
+
+Agent MCP 配置里默认会写入 `command: "dbgraph"`，所以运行 `dbgraph install` 前需要先通过安装脚本或 `npm i -g @dbgraph/cli` 让 `dbgraph` 出现在 `PATH`。
 
 该命令会创建：
 
@@ -261,4 +297,3 @@ Smoke test 会在临时目录初始化 DbGraph 项目，生成 PostgreSQL snapsh
 - 默认关闭 raw sample 存储。
 - 显式开启采样时，敏感样本默认会被 mask。
 - SQLite provider 会拒绝 snapshot `.dbgraph/dbgraph.db`，避免把 DbGraph 内部图数据库误当成业务 SQLite 数据库。
-

@@ -1,28 +1,75 @@
 # DbGraph Quickstart
 
-DbGraph captures database schema into a local graph index and exposes CLI/MCP tools for search, context, diff, impact, SQL validation, and structured analysis reports.
+Get DbGraph running in a project in seconds. DbGraph downloads a prebuilt CLI binary for your OS, initializes local `.dbgraph/` state, and can write MCP configuration for your coding agent.
 
 For the complete workflow, see [usage.md](usage.md).
 中文完整说明见 [usage.zh-CN.md](usage.zh-CN.md)。
 
-## Install From This Repository
+## No Node.js Required
 
-```powershell
-cargo build --workspace
-cargo run -p dbgraph-cli -- --version
+One command downloads the right release asset for your OS and installs `dbgraph` on your `PATH`.
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.sh | sh
 ```
 
-## Initialize A Project
-
 ```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex
+```
+
+Then initialize the project:
+
+```bash
+cd your-project
 dbgraph init -i --yes
+dbgraph install --target codex --yes
 ```
 
-This creates `.dbgraph/`, a config file, local snapshot storage, and agent instruction fragments.
+Use `--target cursor`, `--target claude`, `--target gemini`, or `--target opencode` for other agent configs.
+
+## Already Have Node?
+
+Run directly through npm without manually downloading a binary:
+
+```bash
+npx github:zhangsanfenggithub/dbgraph --version
+npx github:zhangsanfenggithub/dbgraph init -i --yes
+```
+
+After the npm package is published, the command becomes:
+
+```bash
+npx @dbgraph/cli --version
+npm i -g @dbgraph/cli
+```
+
+The Node wrapper downloads the matching GitHub Release asset, verifies its SHA256 checksum, caches the binary locally, and forwards your CLI arguments to `dbgraph`.
+
+For agent MCP configuration, install `dbgraph` on your `PATH` first with the shell installer or `npm i -g`, then run:
+
+```bash
+dbgraph install --target codex --yes
+```
 
 ## Configure A Database
 
-SQLite works without an external service:
+The interactive initializer writes `.dbgraph/dbgraph.config.json`. PostgreSQL uses `DATABASE_URL` by default:
+
+```bash
+export DATABASE_URL="postgres://postgres:postgres@localhost:55432/teashop"
+dbgraph snapshot --profile stats
+```
+
+PowerShell:
+
+```powershell
+$env:DATABASE_URL="postgres://postgres:postgres@localhost:55432/teashop"
+dbgraph snapshot --profile stats
+```
+
+SQLite works without an external service. Set the provider and connection string in `.dbgraph/dbgraph.config.json`:
 
 ```json
 {
@@ -51,26 +98,9 @@ SQLite works without an external service:
 }
 ```
 
-PostgreSQL uses `DATABASE_URL` by default:
-
-```powershell
-$env:DATABASE_URL="postgres://postgres:postgres@localhost:5432/teashop"
-dbgraph snapshot
-```
-
-## Profiling Modes
-
-```powershell
-dbgraph snapshot --profile schema
-dbgraph snapshot --profile stats
-dbgraph snapshot --profile sample --max-rows-per-table 20
-```
-
-`schema` is the default and keeps no profile rows. `stats` keeps provider/catalog profile data. `sample` is explicit opt-in and remains masked by default.
-
 ## Daily Commands
 
-```powershell
+```bash
 dbgraph status
 dbgraph search customer --kind table
 dbgraph table public.orders
@@ -79,17 +109,20 @@ dbgraph context "refund payment order" --tokens 800
 dbgraph validate-sql --sql "select * from orders"
 dbgraph diff
 dbgraph impact public.orders.status
-dbgraph analyze --scope all
-dbgraph analyze --scope risk --json
-dbgraph analyze --scope all --format markdown --output dbgraph-analysis.md
-dbgraph sync
-dbgraph benchmark --tables 10000 --columns-per-table 2
-```
-
-## Full Analysis Report
-
-```powershell
 dbgraph analyze --scope all --format markdown --output dbgraph-analysis.md
 ```
 
-The markdown report includes an overview, section summaries, top findings, evidence, impact, confidence, related objects, and suggested fixes.
+## What The Agent Gets
+
+When a project has `.dbgraph/`, your configured agent can use DbGraph MCP tools for database-structure questions:
+
+- `dbgraph_search`
+- `dbgraph_table`
+- `dbgraph_context`
+- `dbgraph_relations`
+- `dbgraph_impact`
+- `dbgraph_analyze`
+- `dbgraph_diff`
+- `dbgraph_validate_sql`
+
+DbGraph remains read-only during analysis: `validate-sql` does not execute SQL, and `analyze` works from the local snapshot and graph index.

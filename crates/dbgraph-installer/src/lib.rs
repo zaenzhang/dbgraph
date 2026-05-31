@@ -645,6 +645,8 @@ mod tests {
             .parent()
             .and_then(Path::parent)
             .expect("crate lives under workspace");
+        let root_package =
+            fs::read_to_string(root.join("package.json")).expect("root npm package exists");
         let sh = fs::read_to_string(root.join("install.sh")).expect("install.sh should exist");
         let ps1 = fs::read_to_string(root.join("install.ps1")).expect("install.ps1 should exist");
         let package_json =
@@ -659,6 +661,8 @@ mod tests {
         assert!(ps1.contains("InstallDir"));
         assert!(ps1.contains("Get-FileHash"));
         assert!(ps1.contains("Expand-Archive"));
+        assert!(root_package.contains("\"name\": \"@dbgraph/cli\""));
+        assert!(root_package.contains("\"dbgraph\": \"npm/bin/dbgraph.js\""));
         assert!(package_json.contains("\"name\": \"@dbgraph/cli\""));
         assert!(package_json.contains("\"dbgraph\": \"bin/dbgraph.js\""));
         assert!(npm_bin.contains("childProcess.spawn"));

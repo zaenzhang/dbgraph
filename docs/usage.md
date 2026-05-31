@@ -9,7 +9,33 @@ DbGraph is a local-first database context tool. The normal workflow is:
 
 DbGraph stores schema metadata, SQL artifacts, graph edges, and profile summaries. It does not execute SQL during validation, and it does not store business row data by default.
 
-## Run From Source
+## Install Or Run
+
+No Node.js required:
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.sh | sh
+```
+
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex
+```
+
+Already have Node?
+
+```bash
+npx github:zhangsanfenggithub/dbgraph --version
+npx github:zhangsanfenggithub/dbgraph init -i --yes
+```
+
+After the npm package is published:
+
+```bash
+npx @dbgraph/cli --version
+npm i -g @dbgraph/cli
+```
 
 When developing from this repository, prefix CLI commands with Cargo:
 
@@ -32,6 +58,16 @@ Run this from the application or database-project directory you want DbGraph to 
 ```powershell
 dbgraph init -i --yes
 ```
+
+Configure an agent MCP entry without printing or copying JSON manually:
+
+```powershell
+dbgraph install --target codex --yes
+dbgraph install --target cursor --yes
+dbgraph install --target claude --yes
+```
+
+Agent MCP config expects `dbgraph` to be available on `PATH`, so use the shell installer or `npm i -g @dbgraph/cli` before running `dbgraph install`.
 
 This creates:
 

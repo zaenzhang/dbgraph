@@ -73,12 +73,31 @@ Provider details are documented in [docs/provider-capabilities.md](docs/provider
 
 ## Installation
 
-From this repository:
+No Node.js required:
 
 ```bash
-cargo build --workspace
-cargo run -p dbgraph-cli -- --version
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.sh | sh
 ```
+
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex
+```
+
+Already have Node?
+
+```bash
+# Works directly from GitHub before npm publishing
+npx github:zhangsanfenggithub/dbgraph --version
+npx github:zhangsanfenggithub/dbgraph init -i --yes
+
+# After npm publishing
+npx @dbgraph/cli --version
+npm i -g @dbgraph/cli
+```
+
+Agent MCP config expects `dbgraph` to be available on `PATH`, so use the shell installer or global npm install before running `dbgraph install`.
 
 If `dbgraph` is already installed on your `PATH`:
 
@@ -91,6 +110,7 @@ dbgraph --version
 | Step | Command |
 | --- | --- |
 | Initialize project | `dbgraph init -i --yes` |
+| Configure agent MCP | `dbgraph install --target codex --yes` |
 | Capture snapshot | `dbgraph snapshot --profile stats` |
 | Search graph | `dbgraph search orders --kind table` |
 | Inspect table | `dbgraph table public.orders` |

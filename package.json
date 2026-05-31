@@ -1,0 +1,16 @@
+{
+  "name": "@dbgraph/cli",
+  "version": "0.1.0",
+  "description": "DbGraph CLI launcher that downloads the matching release binary",
+  "license": "MIT",
+  "bin": {
+    "dbgraph": "npm/bin/dbgraph.js"
+  },
+  "files": [
+    "npm/bin/dbgraph.js",
+    "npm/package.json"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
