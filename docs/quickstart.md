@@ -1,13 +1,13 @@
 # DbGraph Quickstart
 
-Get DbGraph running in a project in seconds. DbGraph downloads a prebuilt CLI binary for your OS, initializes local `.dbgraph/` state, and can write MCP configuration for your coding agent.
+Get DbGraph running in a project in seconds. The recommended path is a small installer that downloads a prebuilt CLI binary, puts `dbgraph` on your `PATH`, initializes local `.dbgraph/` state, and writes MCP configuration for your coding agent.
 
 For the complete workflow, see [usage.md](usage.md).
 中文完整说明见 [usage.zh-CN.md](usage.zh-CN.md)。
 
-## No Node.js Required
+## Recommended: Install The CLI
 
-One command downloads the right release asset for your OS and installs `dbgraph` on your `PATH`.
+No Node.js or local Rust toolchain is required.
 
 ```bash
 # macOS / Linux
@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/i
 irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex
 ```
 
-Then initialize the project:
+## Initialize A Project
 
 ```bash
 cd your-project
@@ -29,9 +29,11 @@ dbgraph install --target codex --yes
 
 Use `--target cursor`, `--target claude`, `--target gemini`, or `--target opencode` for other agent configs.
 
-## Already Have Node?
+That is the main non-invasive integration: DbGraph stores project state under `.dbgraph/`, and the agent config points to the stable `dbgraph serve --mcp` command.
 
-Run directly through npm without manually downloading a binary:
+## Optional: Try With npx
+
+Use npx only for quick experiments or CI smoke checks. It is not the preferred long-running MCP command because agent MCP config should point to a stable executable on `PATH`.
 
 ```bash
 npx github:zhangsanfenggithub/dbgraph --version
@@ -47,7 +49,7 @@ npm i -g @dbgraph/cli
 
 The Node wrapper downloads the matching GitHub Release asset, verifies its SHA256 checksum, caches the binary locally, and forwards your CLI arguments to `dbgraph`.
 
-For agent MCP configuration, install `dbgraph` on your `PATH` first with the shell installer or `npm i -g`, then run:
+For agent MCP configuration, install `dbgraph` on your `PATH` first with the shell installer or a future package-manager install, then run:
 
 ```bash
 dbgraph install --target codex --yes

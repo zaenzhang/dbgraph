@@ -73,7 +73,7 @@ Provider details are documented in [docs/provider-capabilities.md](docs/provider
 
 ## Installation
 
-No Node.js required:
+Recommended path. No Node.js or local Rust toolchain is required:
 
 ```bash
 # macOS / Linux
@@ -85,19 +85,21 @@ curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/i
 irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex
 ```
 
-Already have Node?
+Optional npx path for quick experiments:
 
 ```bash
-# Works directly from GitHub before npm publishing
 npx github:zhangsanfenggithub/dbgraph --version
 npx github:zhangsanfenggithub/dbgraph init -i --yes
+```
 
-# After npm publishing
+After npm publishing:
+
+```bash
 npx @dbgraph/cli --version
 npm i -g @dbgraph/cli
 ```
 
-Agent MCP config expects `dbgraph` to be available on `PATH`, so use the shell installer or global npm install before running `dbgraph install`.
+Agent MCP config expects `dbgraph` to be available on `PATH`, so use the shell installer or a future package-manager install before running `dbgraph install`.
 
 If `dbgraph` is already installed on your `PATH`:
 
@@ -106,6 +108,12 @@ dbgraph --version
 ```
 
 ## Quickstart
+
+```bash
+cd your-project
+dbgraph init -i --yes
+dbgraph install --target codex --yes
+```
 
 | Step | Command |
 | --- | --- |

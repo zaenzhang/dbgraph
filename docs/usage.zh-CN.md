@@ -11,7 +11,7 @@ DbGraph 默认保存的是 schema 元数据、SQL artifact、图关系和 profil
 
 ## 安装或直接运行
 
-不需要 Node.js 时，可以直接下载对应系统的 release 二进制：
+推荐方式是不依赖 Node.js，也不需要本机安装 Rust toolchain，直接下载对应系统的 release 二进制：
 
 ```bash
 # macOS / Linux
@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/i
 irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex
 ```
 
-如果已经有 Node.js，可以先直接从 GitHub 运行，不需要手动下载二进制：
+如果只是临时试用或做 CI smoke check，也可以用 npx 直接从 GitHub 运行：
 
 ```bash
 npx github:zhangsanfenggithub/dbgraph --version
@@ -67,7 +67,7 @@ dbgraph install --target cursor --yes
 dbgraph install --target claude --yes
 ```
 
-Agent MCP 配置里默认会写入 `command: "dbgraph"`，所以运行 `dbgraph install` 前需要先通过安装脚本或 `npm i -g @dbgraph/cli` 让 `dbgraph` 出现在 `PATH`。
+Agent MCP 配置里默认会写入 `command: "dbgraph"`，所以运行 `dbgraph install` 前需要先通过安装脚本或未来的包管理器安装方式让 `dbgraph` 出现在 `PATH`。
 
 该命令会创建：
 

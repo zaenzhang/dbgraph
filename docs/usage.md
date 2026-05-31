@@ -11,7 +11,7 @@ DbGraph stores schema metadata, SQL artifacts, graph edges, and profile summarie
 
 ## Install Or Run
 
-No Node.js required:
+Recommended path. No Node.js or local Rust toolchain is required:
 
 ```bash
 # macOS / Linux
@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/i
 irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex
 ```
 
-Already have Node?
+Optional npx path for quick experiments:
 
 ```bash
 npx github:zhangsanfenggithub/dbgraph --version
@@ -67,7 +67,7 @@ dbgraph install --target cursor --yes
 dbgraph install --target claude --yes
 ```
 
-Agent MCP config expects `dbgraph` to be available on `PATH`, so use the shell installer or `npm i -g @dbgraph/cli` before running `dbgraph install`.
+Agent MCP config expects `dbgraph` to be available on `PATH`, so use the shell installer or a future package-manager install before running `dbgraph install`.
 
 This creates:
 
