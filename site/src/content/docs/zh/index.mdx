@@ -1,61 +1,149 @@
 ---
-title: DbGraph
-description: 面向 AI Coding Agent 的本地优先数据库上下文工具。
+title: 面向 AI Coding Agent 的数据库上下文
+description: DbGraph 将 schema graph、SQL lineage 和审查报告整理成本地上下文，让 Agent 更安全地理解数据库变更。
 template: splash
 hero:
-  tagline: 把数据库 schema、SQL artifact 和关系整理成本地图谱，让 Agent 可以搜索、校验、分析影响和生成审查报告，默认不存储业务行数据。
+  tagline: DbGraph 把数据库 schema、SQL artifact 和对象关系整理成本地图谱，让 Agent 可以搜索、校验 SQL、分析影响并生成审查报告，默认不存储业务行数据。
   actions:
     - text: 阅读中文指南
-      link: /zh/usage/
+      link: /dbgraph/zh/usage/
       icon: right-arrow
     - text: GitHub
       link: https://github.com/zaenzhang/dbgraph
       icon: external
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+<div class="home-flags">
+  <span>PostgreSQL & SQLite</span>
+  <span>CLI + MCP</span>
+  <span>本地优先</span>
+  <span>Rust 实现</span>
+</div>
 
-<CardGrid>
-  <Card title="本地优先快照" icon="database">
-    将 PostgreSQL 和 SQLite 元数据捕获到 `.dbgraph/`，默认不存储原始业务行数据。
-  </Card>
-  <Card title="面向 Agent 的上下文" icon="seti:graphql">
-    支持 search、table、relations、impact、validate-sql、analyze 和 MCP 上下文工具。
-  </Card>
-  <Card title="结构化审查报告" icon="document">
-    按安全、质量、SQL 工作负载和性能输出 findings、证据、置信度和建议修复方式。
-  </Card>
-  <Card title="可验证价值" icon="rocket">
-    支持 suppressions、CI gate 和离线 benchmark，方便在真实项目中衡量价值。
-  </Card>
-</CardGrid>
+## DbGraph 给 Agent 什么能力
 
-## 快速路径
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/zaenzhang/dbgraph/master/install.sh | sh
-cd your-project
-dbgraph init -i --yes
-dbgraph doctor
-dbgraph snapshot --profile stats
-dbgraph analyze --scope all --format markdown --output dbgraph-analysis.md
-```
-
-## 当前 Teashop Benchmark
-
-<div class="card-grid">
-  <div class="metric-card">
-    <strong>67,326</strong>
-    Baseline estimated tokens
+<div class="feature-row">
+  <div>
+    <span class="feature-icon">⌕</span>
+    <h3>搜索和查看</h3>
+    <p>从本地图谱中查找表、列、视图、routine 和 SQL artifact。</p>
+    <code>dbgraph search orders</code>
   </div>
-  <div class="metric-card">
-    <strong>6,324</strong>
-    DbGraph estimated tokens
+  <div>
+    <span class="feature-icon">⟷</span>
+    <h3>追踪关系</h3>
+    <p>在修改数据库代码前，查看 schema 关系、推断边和 SQL lineage。</p>
+    <code>dbgraph relations public.orders</code>
   </div>
-  <div class="metric-card">
-    <strong>-90.6%</strong>
-    离线上下文 token reduction
+  <div>
+    <span class="feature-icon">◎</span>
+    <h3>影响分析</h3>
+    <p>判断 schema 或 SQL 变更可能影响哪些对象和 SQL artifact。</p>
+    <code>dbgraph impact public.orders</code>
+  </div>
+  <div>
+    <span class="feature-icon">✓</span>
+    <h3>SQL 校验</h3>
+    <p>基于图谱校验 SQL 引用，不需要对生产库执行业务 SQL。</p>
+    <code>dbgraph validate-sql</code>
   </div>
 </div>
 
-这是 deterministic offline benchmark，不调用 LLM，也不代表真实 provider billing token。
+## 工作流程
+
+<div class="workflow-rail">
+  <div>
+    <strong>1</strong>
+    <h3>初始化</h3>
+    <p>创建 `.dbgraph/` 并配置数据库 provider。</p>
+    <code>dbgraph init -i</code>
+  </div>
+  <div>
+    <strong>2</strong>
+    <h3>快照</h3>
+    <p>捕获 schema 元数据和可选统计信息。</p>
+    <code>dbgraph snapshot</code>
+  </div>
+  <div>
+    <strong>3</strong>
+    <h3>图谱</h3>
+    <p>建立对象、关系和 SQL artifact 的本地索引。</p>
+    <code>.dbgraph/dbgraph.db</code>
+  </div>
+  <div>
+    <strong>4</strong>
+    <h3>Agent 上下文</h3>
+    <p>通过 CLI 或 MCP 工具获取聚焦上下文。</p>
+    <code>dbgraph context</code>
+  </div>
+  <div>
+    <strong>5</strong>
+    <h3>分析报告</h3>
+    <p>输出带证据、置信度和建议修复方式的 findings。</p>
+    <code>dbgraph analyze</code>
+  </div>
+</div>
+
+## 面向审查的输出
+
+<div class="review-grid">
+  <section>
+    <h3>Security & Privacy</h3>
+    <p>敏感列、SQL 读取敏感数据，以及宽泛的 `SELECT *` 使用。</p>
+  </section>
+  <section>
+    <h3>Data Integrity</h3>
+    <p>缺失主键、疑似缺失外键，以及 schema 质量风险。</p>
+  </section>
+  <section>
+    <h3>SQL Workload</h3>
+    <p>高风险写操作、无 `WHERE` 的 `UPDATE` 或 `DELETE`，以及 workload 安全信号。</p>
+  </section>
+  <section>
+    <h3>Performance</h3>
+    <p>过滤列和 JOIN 列缺少索引，并关联到受影响的 SQL artifact。</p>
+  </section>
+</div>
+
+## 落地控制
+
+<div class="control-grid">
+  <div>
+    <h3>Doctor</h3>
+    <p>诊断项目配置、快照、图文件、provider 配置和 Agent 安装状态。</p>
+    <code>dbgraph doctor</code>
+  </div>
+  <div>
+    <h3>Suppressions</h3>
+    <p>用 owner、reason 和过期时间记录已接受的 findings。</p>
+    <code>.dbgraph/suppressions.json</code>
+  </div>
+  <div>
+    <h3>CI gates</h3>
+    <p>在活跃或新增的高风险 findings 出现时让 CI 失败。</p>
+    <code>--fail-on-new high</code>
+  </div>
+  <div>
+    <h3>Benchmark</h3>
+    <p>离线估算上下文大小和证据覆盖率，不调用 LLM。</p>
+    <code>dbgraph benchmark-agent</code>
+  </div>
+</div>
+
+## Evidence, not the headline
+
+<div class="proof-strip">
+  <div>
+    <h3>离线 teashop benchmark</h3>
+    <p>结果来自本地项目材料、snapshot、SQL lineage、context package 和 analysis findings 的确定性估算。不调用 LLM，也不代表真实 provider billing token。</p>
+  </div>
+  <div class="proof-metric">
+    <strong>67,326 → 6,324</strong>
+    <span>estimated tokens</span>
+  </div>
+  <div class="proof-metric">
+    <strong>90.6%</strong>
+    <span>offline context reduction</span>
+  </div>
+  <a class="proof-link" href="/dbgraph/agent-benchmark/">查看方法说明</a>
+</div>

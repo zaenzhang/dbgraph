@@ -1,61 +1,149 @@
 ---
-title: DbGraph
-description: Local-first database context for AI coding agents.
+title: Database context for AI coding agents
+description: DbGraph builds local schema graphs, SQL lineage, and review reports so AI coding agents can reason about database changes safely.
 template: splash
 hero:
-  tagline: Build a local graph of schema objects, SQL artifacts, and relationships so agents can search, validate, analyze, and reason about database changes without storing business row data by default.
+  tagline: DbGraph builds a local graph of your database schema, SQL artifacts, and relationships so agents can search, validate, analyze impact, and produce review reports without storing business row data by default.
   actions:
     - text: Start with Quickstart
-      link: /quickstart/
+      link: /dbgraph/quickstart/
       icon: right-arrow
     - text: View on GitHub
       link: https://github.com/zaenzhang/dbgraph
       icon: external
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+<div class="home-flags">
+  <span>PostgreSQL & SQLite</span>
+  <span>CLI + MCP</span>
+  <span>Local-first</span>
+  <span>Built with Rust</span>
+</div>
 
-<CardGrid>
-  <Card title="Local-first snapshots" icon="database">
-    Capture PostgreSQL and SQLite metadata into `.dbgraph/` with safe defaults and no raw row storage by default.
-  </Card>
-  <Card title="Agent-ready context" icon="seti:graphql">
-    Search, inspect, traverse, validate SQL, and expose compact MCP context for database-aware coding agents.
-  </Card>
-  <Card title="Structured review reports" icon="document">
-    Report security, data quality, SQL workload, and performance findings with evidence, confidence, and suggested fixes.
-  </Card>
-  <Card title="CI and benchmark support" icon="rocket">
-    Use suppressions, gates, and offline context benchmarks to make DbGraph measurable in real project workflows.
-  </Card>
-</CardGrid>
+## What DbGraph gives an agent
 
-## Quick Path
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/zaenzhang/dbgraph/master/install.sh | sh
-cd your-project
-dbgraph init -i --yes
-dbgraph doctor
-dbgraph snapshot --profile stats
-dbgraph analyze --scope all --format markdown --output dbgraph-analysis.md
-```
-
-## Current Teashop Benchmark
-
-<div class="card-grid">
-  <div class="metric-card">
-    <strong>67,326</strong>
-    Baseline estimated tokens
+<div class="feature-row">
+  <div>
+    <span class="feature-icon">⌕</span>
+    <h3>Search and inspect</h3>
+    <p>Find tables, columns, views, routines, and SQL artifacts from a compact local graph.</p>
+    <code>dbgraph search orders</code>
   </div>
-  <div class="metric-card">
-    <strong>6,324</strong>
-    DbGraph estimated tokens
+  <div>
+    <span class="feature-icon">⟷</span>
+    <h3>Trace relationships</h3>
+    <p>Traverse schema relations, inferred edges, and SQL lineage before changing database code.</p>
+    <code>dbgraph relations public.orders</code>
   </div>
-  <div class="metric-card">
-    <strong>-90.6%</strong>
-    Offline context token reduction
+  <div>
+    <span class="feature-icon">◎</span>
+    <h3>Analyze impact</h3>
+    <p>See which objects and SQL artifacts may be affected by a schema or query change.</p>
+    <code>dbgraph impact public.orders</code>
+  </div>
+  <div>
+    <span class="feature-icon">✓</span>
+    <h3>Validate SQL</h3>
+    <p>Check references against the graph without executing business SQL against production data.</p>
+    <code>dbgraph validate-sql</code>
   </div>
 </div>
 
-The benchmark is deterministic and offline. It does not call an LLM or measure provider billing tokens.
+## How it works
+
+<div class="workflow-rail">
+  <div>
+    <strong>1</strong>
+    <h3>Init</h3>
+    <p>Create `.dbgraph/` and configure a provider.</p>
+    <code>dbgraph init -i</code>
+  </div>
+  <div>
+    <strong>2</strong>
+    <h3>Snapshot</h3>
+    <p>Capture schema metadata and optional statistics.</p>
+    <code>dbgraph snapshot</code>
+  </div>
+  <div>
+    <strong>3</strong>
+    <h3>Graph</h3>
+    <p>Build a local index of objects, edges, and SQL artifacts.</p>
+    <code>.dbgraph/dbgraph.db</code>
+  </div>
+  <div>
+    <strong>4</strong>
+    <h3>Agent context</h3>
+    <p>Use CLI or MCP tools to retrieve focused context.</p>
+    <code>dbgraph context</code>
+  </div>
+  <div>
+    <strong>5</strong>
+    <h3>Analyze</h3>
+    <p>Generate review-ready findings with evidence and fixes.</p>
+    <code>dbgraph analyze</code>
+  </div>
+</div>
+
+## Review-ready outputs
+
+<div class="review-grid">
+  <section>
+    <h3>Security & Privacy</h3>
+    <p>Sensitive columns, SQL reads of sensitive data, and broad `SELECT *` usage.</p>
+  </section>
+  <section>
+    <h3>Data Integrity</h3>
+    <p>Missing primary keys, probable missing foreign keys, and schema quality risks.</p>
+  </section>
+  <section>
+    <h3>SQL Workload</h3>
+    <p>High-risk writes, `UPDATE` or `DELETE` without `WHERE`, and workload safety signals.</p>
+  </section>
+  <section>
+    <h3>Performance</h3>
+    <p>Filter and join columns without supporting indexes, linked back to SQL artifacts.</p>
+  </section>
+</div>
+
+## Adoption controls
+
+<div class="control-grid">
+  <div>
+    <h3>Doctor</h3>
+    <p>Diagnose setup, snapshots, graph files, provider config, and agent installation.</p>
+    <code>dbgraph doctor</code>
+  </div>
+  <div>
+    <h3>Suppressions</h3>
+    <p>Document accepted findings with owners, reasons, and expiration dates.</p>
+    <code>.dbgraph/suppressions.json</code>
+  </div>
+  <div>
+    <h3>CI gates</h3>
+    <p>Fail builds on active or newly introduced high-severity findings.</p>
+    <code>--fail-on-new high</code>
+  </div>
+  <div>
+    <h3>Benchmark</h3>
+    <p>Estimate context size and evidence coverage without calling an LLM.</p>
+    <code>dbgraph benchmark-agent</code>
+  </div>
+</div>
+
+## Evidence, not the headline
+
+<div class="proof-strip">
+  <div>
+    <h3>Offline teashop benchmark</h3>
+    <p>Deterministic estimate from local project materials, snapshot data, SQL lineage, context packages, and analysis findings. It does not call an LLM or represent provider billing tokens.</p>
+  </div>
+  <div class="proof-metric">
+    <strong>67,326 → 6,324</strong>
+    <span>estimated tokens</span>
+  </div>
+  <div class="proof-metric">
+    <strong>90.6%</strong>
+    <span>offline context reduction</span>
+  </div>
+  <a class="proof-link" href="/dbgraph/agent-benchmark/">Read methodology</a>
+</div>

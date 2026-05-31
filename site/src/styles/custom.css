@@ -30,12 +30,172 @@
 
 .hero {
   border-bottom: 1px solid var(--sl-color-gray-5);
+  padding-block: clamp(4rem, 8vw, 7rem);
 }
 
-.card-grid {
+.hero h1 {
+  max-width: 21ch;
+}
+
+.home-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin: 0.25rem 0 2.5rem;
+}
+
+.home-flags span {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 999px;
+  color: var(--sl-color-gray-2);
+  font-size: 0.82rem;
+  line-height: 1;
+  padding: 0.48rem 0.7rem;
+}
+
+.feature-row,
+.review-grid,
+.control-grid {
   display: grid;
   gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  margin: 1rem 0 2.5rem;
+}
+
+.feature-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.feature-row > div,
+.control-grid > div,
+.review-grid > section {
+  border-top: 1px solid var(--sl-color-gray-5);
+  padding-top: 1rem;
+}
+
+.feature-row h3,
+.workflow-rail h3,
+.review-grid h3,
+.control-grid h3,
+.proof-strip h3 {
+  font-size: 1rem;
+  margin: 0.35rem 0 0.35rem;
+}
+
+.feature-row p,
+.workflow-rail p,
+.review-grid p,
+.control-grid p,
+.proof-strip p {
+  color: var(--sl-color-gray-3);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  margin: 0 0 0.85rem;
+}
+
+.feature-row code,
+.workflow-rail code,
+.control-grid code {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.35rem;
+  color: var(--sl-color-accent-high);
+  font-size: 0.78rem;
+  padding: 0.18rem 0.35rem;
+}
+
+.feature-icon {
+  align-items: center;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.5rem;
+  color: var(--sl-color-accent-high);
+  display: inline-flex;
+  font-size: 1.05rem;
+  height: 2rem;
+  justify-content: center;
+  width: 2rem;
+}
+
+.workflow-rail {
+  counter-reset: step;
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 1rem 0 2.5rem;
+}
+
+.workflow-rail > div {
+  border-top: 1px solid var(--sl-color-gray-5);
+  padding: 1rem 1rem 0 0;
+  position: relative;
+}
+
+.workflow-rail > div + div {
+  border-left: 1px solid var(--sl-color-gray-5);
+  padding-left: 1rem;
+}
+
+.workflow-rail strong {
+  align-items: center;
+  background: var(--sl-color-accent-low);
+  border-radius: 999px;
+  color: var(--sl-color-accent-high);
+  display: inline-flex;
+  font-size: 0.78rem;
+  height: 1.55rem;
+  justify-content: center;
+  width: 1.55rem;
+}
+
+.review-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.review-grid > section {
+  background: color-mix(in srgb, var(--sl-color-gray-6) 38%, transparent);
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.5rem;
+  padding: 1rem;
+}
+
+.control-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.proof-strip {
+  align-items: center;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.6rem;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 2fr) minmax(8rem, 0.8fr) minmax(8rem, 0.8fr) auto;
+  margin: 1rem 0 0;
+  padding: 1rem;
+}
+
+.proof-metric {
+  border-left: 1px solid var(--sl-color-gray-5);
+  padding-left: 1rem;
+}
+
+.proof-metric strong {
+  color: var(--sl-color-white);
+  display: block;
+  font-size: 1.08rem;
+}
+
+.proof-metric span {
+  color: var(--sl-color-gray-3);
+  display: block;
+  font-size: 0.78rem;
+  margin-top: 0.2rem;
+}
+
+.proof-link {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 999px;
+  color: var(--sl-color-accent-high);
+  font-size: 0.86rem;
+  padding: 0.5rem 0.75rem;
+  text-decoration: none;
 }
 
 .metric-card {
@@ -49,4 +209,46 @@
   display: block;
   font-size: 1.35rem;
   color: var(--sl-color-white);
+}
+
+@media (max-width: 64rem) {
+  .feature-row,
+  .control-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workflow-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-rail > div,
+  .workflow-rail > div + div {
+    border-left: 0;
+    padding-left: 0;
+  }
+
+  .proof-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .proof-strip > div:first-child,
+  .proof-link {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 42rem) {
+  .feature-row,
+  .review-grid,
+  .control-grid,
+  .proof-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .proof-metric {
+    border-left: 0;
+    border-top: 1px solid var(--sl-color-gray-5);
+    padding-left: 0;
+    padding-top: 0.85rem;
+  }
 }
