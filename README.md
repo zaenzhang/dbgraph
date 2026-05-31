@@ -18,7 +18,7 @@ Build a local graph of database schema objects, SQL artifacts, and relationships
 
 | Guide | Description |
 | --- | --- |
-| [Website](https://zhangsanfenggithub.github.io/dbgraph/) | GitHub Pages site with quickstart and docs. |
+| [Website](https://zaenzhang.github.io/dbgraph/) | GitHub Pages site with quickstart and docs. |
 | [English Usage Guide](docs/usage.md) | Complete workflow, provider setup, CLI usage, MCP, and smoke tests. |
 | [Project Configuration](docs/configuration.md) | `.dbgraph/dbgraph.config.json` fields, provider examples, security, and MCP settings. |
 | [中文使用说明](docs/usage.zh-CN.md) | 中文完整使用流程、配置、常用命令和安全说明。 |
@@ -79,19 +79,19 @@ Recommended path. No Node.js or local Rust toolchain is required:
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zaenzhang/dbgraph/master/install.sh | sh
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/zaenzhang/dbgraph/master/install.ps1 | iex
 ```
 
 Optional npx path for quick experiments:
 
 ```bash
-npx github:zhangsanfenggithub/dbgraph --version
-npx github:zhangsanfenggithub/dbgraph init -i --yes
+npx github:zaenzhang/dbgraph --version
+npx github:zaenzhang/dbgraph init -i --yes
 ```
 
 After npm publishing:

@@ -597,10 +597,8 @@ mod tests {
             assert!(artifact.contains(target.triple));
             assert_eq!(target.checksum_name("0.1.0"), format!("{artifact}.sha256"));
             assert_eq!(
-                target.download_url("https://github.com/zhangsanfenggithub/dbgraph", "0.1.0"),
-                format!(
-                    "https://github.com/zhangsanfenggithub/dbgraph/releases/download/v0.1.0/{artifact}"
-                )
+                target.download_url("https://github.com/zaenzhang/dbgraph", "0.1.0"),
+                format!("https://github.com/zaenzhang/dbgraph/releases/download/v0.1.0/{artifact}")
             );
         }
     }

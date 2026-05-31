@@ -1,7 +1,7 @@
 param(
   [string]$Version = $(if ($env:DBG_VERSION) { $env:DBG_VERSION } else { "latest" }),
   [string]$InstallDir = $(if ($env:DBG_INSTALL_DIR) { $env:DBG_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".dbgraph\bin" }),
-  [string]$Repo = $(if ($env:DBG_REPO) { $env:DBG_REPO } else { "https://github.com/zhangsanfenggithub/dbgraph" }),
+  [string]$Repo = $(if ($env:DBG_REPO) { $env:DBG_REPO } else { "https://github.com/zaenzhang/dbgraph" }),
   [switch]$Help
 )
 

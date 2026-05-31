@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO="${DBG_REPO:-https://github.com/zhangsanfenggithub/dbgraph}"
+REPO="${DBG_REPO:-https://github.com/zaenzhang/dbgraph}"
 VERSION="${DBG_VERSION:-latest}"
 INSTALL_DIR="${DBG_INSTALL_DIR:-$HOME/.local/bin}"
 

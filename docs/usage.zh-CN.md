@@ -17,19 +17,19 @@ DbGraph 默认保存的是 schema 元数据、SQL artifact、图关系和 profil
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zaenzhang/dbgraph/master/install.sh | sh
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/zaenzhang/dbgraph/master/install.ps1 | iex
 ```
 
 如果只是临时试用或做 CI smoke check，也可以用 npx 直接从 GitHub 运行：
 
 ```bash
-npx github:zhangsanfenggithub/dbgraph --version
-npx github:zhangsanfenggithub/dbgraph init -i --yes
+npx github:zaenzhang/dbgraph --version
+npx github:zaenzhang/dbgraph init -i --yes
 ```
 
 npm 包正式发布后，可以改用：

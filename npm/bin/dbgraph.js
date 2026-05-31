@@ -8,7 +8,7 @@ const https = require('https');
 const os = require('os');
 const path = require('path');
 
-const REPO = process.env.DBG_REPO || 'https://github.com/zhangsanfenggithub/dbgraph';
+const REPO = process.env.DBG_REPO || 'https://github.com/zaenzhang/dbgraph';
 const VERSION = process.env.DBG_VERSION || require('../package.json').version;
 
 main().catch((error) => {

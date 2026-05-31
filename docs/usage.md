@@ -17,19 +17,19 @@ Recommended path. No Node.js or local Rust toolchain is required:
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zaenzhang/dbgraph/master/install.sh | sh
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/zaenzhang/dbgraph/master/install.ps1 | iex
 ```
 
 Optional npx path for quick experiments:
 
 ```bash
-npx github:zhangsanfenggithub/dbgraph --version
-npx github:zhangsanfenggithub/dbgraph init -i --yes
+npx github:zaenzhang/dbgraph --version
+npx github:zaenzhang/dbgraph init -i --yes
 ```
 
 After the npm package is published:

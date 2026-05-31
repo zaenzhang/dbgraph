@@ -23,8 +23,8 @@ downloads should use a `vX.Y.Z` tag.
 Download URL convention:
 
 ```text
-https://github.com/zhangsanfenggithub/dbgraph/releases/download/v{version}/dbgraph-v{version}-{target}.{ext}
-https://github.com/zhangsanfenggithub/dbgraph/releases/download/v{version}/dbgraph-v{version}-{target}.{ext}.sha256
+https://github.com/zaenzhang/dbgraph/releases/download/v{version}/dbgraph-v{version}-{target}.{ext}
+https://github.com/zaenzhang/dbgraph/releases/download/v{version}/dbgraph-v{version}-{target}.{ext}.sha256
 ```
 
 Installers and npm wrappers must derive URLs from this matrix rather than
