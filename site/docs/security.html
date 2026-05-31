@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DbGraph Security</title>
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="nav" aria-label="Primary">
+        <a class="brand" href="../index.html"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M7 7h10v10H7z" stroke="currentColor" stroke-width="2" /><path d="M4 12h3M17 12h3M12 4v3M12 17v3" stroke="currentColor" stroke-width="2" /></svg></span>DbGraph</a>
+        <div class="nav-links"><a href="quickstart.html">Quickstart</a><a href="usage.html">Docs</a><a href="https://github.com/zhangsanfenggithub/dbgraph">GitHub</a></div>
+      </nav>
+    </header>
+    <main class="section">
+      <div class="container docs-layout">
+        <aside class="docs-sidebar">
+          <a href="quickstart.html">Quickstart</a>
+          <a href="usage.html">Usage Guide</a>
+          <a href="usage-zh.html">中文说明</a>
+          <a href="providers.html">Provider Capabilities</a>
+          <a href="security.html">Security</a>
+          <a href="release-matrix.html">Release Matrix</a>
+        </aside>
+        <article class="docs-body">
+          <h1>Security Model</h1>
+          <p>DbGraph is designed as a local, read-only database context tool.</p>
+          <h2>Boundaries</h2>
+          <ul>
+            <li><code>dbgraph validate-sql</code> never executes SQL.</li>
+            <li><code>dbgraph analyze</code> works from the local snapshot and graph index.</li>
+            <li><code>dbgraph snapshot</code> is the command that connects to the configured database.</li>
+            <li>Raw sample storage is off by default.</li>
+            <li>Sensitive samples are masked when sampling is explicitly enabled.</li>
+            <li>Sensitive connection strings are not printed in provider errors.</li>
+            <li>SQLite provider refuses to snapshot <code>.dbgraph/dbgraph.db</code>.</li>
+          </ul>
+          <h2>PII analysis</h2>
+          <p>
+            DbGraph can flag sensitive-looking columns and SQL artifacts that reference those
+            columns. Findings include evidence, confidence, related objects, and suggested fixes.
+          </p>
+        </article>
+      </div>
+    </main>
+  </body>
+</html>

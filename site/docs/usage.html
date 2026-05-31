@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DbGraph Usage Guide</title>
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="nav" aria-label="Primary">
+        <a class="brand" href="../index.html"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M7 7h10v10H7z" stroke="currentColor" stroke-width="2" /><path d="M4 12h3M17 12h3M12 4v3M12 17v3" stroke="currentColor" stroke-width="2" /></svg></span>DbGraph</a>
+        <div class="nav-links">
+          <a href="quickstart.html">Quickstart</a>
+          <a href="usage.html">Docs</a>
+          <a href="https://github.com/zhangsanfenggithub/dbgraph">GitHub</a>
+        </div>
+      </nav>
+    </header>
+    <main class="section">
+      <div class="container docs-layout">
+        <aside class="docs-sidebar" aria-label="Documentation">
+          <a href="quickstart.html">Quickstart</a>
+          <a href="usage.html">Usage Guide</a>
+          <a href="usage-zh.html">中文说明</a>
+          <a href="providers.html">Provider Capabilities</a>
+          <a href="security.html">Security</a>
+          <a href="release-matrix.html">Release Matrix</a>
+        </aside>
+        <article class="docs-body">
+          <h1>DbGraph Usage Guide</h1>
+          <p>
+            DbGraph is a local-first database context tool. The normal workflow is: initialize a
+            project, configure a provider, capture a snapshot, then use the local graph for search,
+            validation, impact analysis, and review reports.
+          </p>
+
+          <h2>Install or run</h2>
+          <pre><code># macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.sh | sh</code></pre>
+          <pre><code># Windows PowerShell
+irm https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.ps1 | iex</code></pre>
+
+          <h2>Initialize a project</h2>
+          <pre><code>dbgraph init -i --yes
+dbgraph install --target codex --yes
+dbgraph status</code></pre>
+          <p>
+            This creates <code>.dbgraph/dbgraph.config.json</code>,
+            <code>.dbgraph/snapshots/</code>, <code>.dbgraph/instructions/</code>, and
+            <code>.dbgraph/dbgraph.db</code> after the first successful snapshot.
+          </p>
+
+          <h2>Configure a database</h2>
+          <h3>PostgreSQL</h3>
+          <pre><code>$env:DATABASE_URL="postgres://postgres:postgres@localhost:55432/teashop"
+dbgraph snapshot --profile stats</code></pre>
+          <h3>SQLite</h3>
+          <p>
+            SQLite does not require an external service. Set <code>provider</code> to
+            <code>sqlite</code> and <code>connectionString</code> to your business database file in
+            <code>.dbgraph/dbgraph.config.json</code>.
+          </p>
+
+          <h2>SQL artifacts</h2>
+          <p>
+            During snapshot, DbGraph scans <code>migrations/</code>, <code>sql/</code>, and
+            <code>db/</code> for SQL files. SQL artifacts become query objects in the graph, with
+            read, write, filter, and join dependencies where supported.
+          </p>
+
+          <h2>Daily CLI commands</h2>
+          <pre><code>dbgraph search customer
+dbgraph table public.orders
+dbgraph relations public.orders --depth 2
+dbgraph context "refund payment order" --tokens 800
+dbgraph validate-sql --sql "select * from orders"
+dbgraph diff
+dbgraph impact public.orders.status</code></pre>
+
+          <h2>Analysis reports</h2>
+          <pre><code>dbgraph analyze --scope all
+dbgraph analyze --scope risk
+dbgraph analyze --scope all --format markdown --output dbgraph-analysis.md</code></pre>
+          <p>
+            Reports include overview, risk score, section summaries, top findings, severity counts,
+            evidence, impact, confidence, suggested fixes, and related SQL/schema objects.
+          </p>
+
+          <h2>MCP server</h2>
+          <pre><code>dbgraph serve --mcp</code></pre>
+          <p>
+            MCP tools include <code>dbgraph_status</code>, <code>dbgraph_search</code>,
+            <code>dbgraph_table</code>, <code>dbgraph_context</code>,
+            <code>dbgraph_relations</code>, <code>dbgraph_impact</code>,
+            <code>dbgraph_analyze</code>, <code>dbgraph_diff</code>, and
+            <code>dbgraph_validate_sql</code>.
+          </p>
+        </article>
+      </div>
+    </main>
+  </body>
+</html>

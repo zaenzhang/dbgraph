@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DbGraph Provider Capabilities</title>
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="nav" aria-label="Primary">
+        <a class="brand" href="../index.html"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M7 7h10v10H7z" stroke="currentColor" stroke-width="2" /><path d="M4 12h3M17 12h3M12 4v3M12 17v3" stroke="currentColor" stroke-width="2" /></svg></span>DbGraph</a>
+        <div class="nav-links"><a href="quickstart.html">Quickstart</a><a href="usage.html">Docs</a><a href="https://github.com/zhangsanfenggithub/dbgraph">GitHub</a></div>
+      </nav>
+    </header>
+    <main class="section">
+      <div class="container docs-layout">
+        <aside class="docs-sidebar">
+          <a href="quickstart.html">Quickstart</a>
+          <a href="usage.html">Usage Guide</a>
+          <a href="usage-zh.html">中文说明</a>
+          <a href="providers.html">Provider Capabilities</a>
+          <a href="security.html">Security</a>
+          <a href="release-matrix.html">Release Matrix</a>
+        </aside>
+        <article class="docs-body">
+          <h1>Provider Capabilities</h1>
+          <p>DbGraph currently supports PostgreSQL and SQLite snapshots.</p>
+          <table>
+            <thead>
+              <tr><th>Provider</th><th>Status</th><th>Capabilities</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>PostgreSQL</td>
+                <td>Supported</td>
+                <td>Schemas, tables, columns, constraints, indexes, views, materialized views, routines, triggers, enums, sequences, and available statistics.</td>
+              </tr>
+              <tr>
+                <td>SQLite</td>
+                <td>Supported</td>
+                <td>Local business database files with tables, columns, primary keys, foreign keys, unique constraints, indexes, views, and exact table counts.</td>
+              </tr>
+              <tr>
+                <td>MySQL</td>
+                <td>Registered, skipped</td>
+                <td>Waiting for local or containerized service fixtures.</td>
+              </tr>
+              <tr>
+                <td>SQL Server</td>
+                <td>Registered, skipped</td>
+                <td>Waiting for local or containerized service fixtures.</td>
+              </tr>
+            </tbody>
+          </table>
+          <h2>Profiling modes</h2>
+          <ul>
+            <li><code>schema</code>: schema-only metadata; safest default.</li>
+            <li><code>stats</code>: provider/catalog statistics such as row estimates.</li>
+            <li><code>sample</code>: explicit opt-in sampling; masked by default.</li>
+          </ul>
+        </article>
+      </div>
+    </main>
+  </body>
+</html>

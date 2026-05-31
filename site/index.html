@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DbGraph - Local-first database context for AI coding agents</title>
+    <meta
+      name="description"
+      content="DbGraph builds a local graph of database schema objects, SQL artifacts, and relationships for CLI and MCP agent workflows."
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="nav" aria-label="Primary">
+        <a class="brand" href="index.html" aria-label="DbGraph home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M7 7h10v10H7z" stroke="currentColor" stroke-width="2" />
+              <path d="M4 12h3M17 12h3M12 4v3M12 17v3" stroke="currentColor" stroke-width="2" />
+            </svg>
+          </span>
+          DbGraph
+        </a>
+        <div class="nav-links">
+          <a href="docs/quickstart.html">Quickstart</a>
+          <a href="docs/usage.html">Docs</a>
+          <a href="https://github.com/zhangsanfenggithub/dbgraph">GitHub</a>
+        </div>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="container hero-grid">
+          <div>
+            <h1>Local-first database context for AI coding agents</h1>
+            <p class="lead">
+              Build a local graph of schema objects, SQL artifacts, and relationships so agents can
+              search, validate, analyze, and reason about database changes without storing business
+              row data by default.
+            </p>
+            <div class="actions">
+              <a class="button primary" href="docs/quickstart.html">Start with Quickstart</a>
+              <a class="button" href="docs/usage.html">Read the Docs</a>
+            </div>
+          </div>
+          <div class="terminal" aria-label="DbGraph install commands">
+            <div class="terminal-bar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span>terminal</span>
+            </div>
+            <pre><code><span class="shell">$</span> curl -fsSL https://raw.githubusercontent.com/zhangsanfenggithub/dbgraph/master/install.sh | sh
+<span class="shell">$</span> cd your-project
+<span class="shell">$</span> dbgraph init -i --yes
+<span class="shell">$</span> dbgraph install --target codex --yes
+<span class="shell">$</span> dbgraph analyze --format markdown --output dbgraph-analysis.md</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="features">
+        <div class="container">
+          <div class="section-header">
+            <h2>Database context without exploratory SQL</h2>
+            <p>
+              DbGraph captures schema metadata and SQL workload structure into local project state,
+              then exposes that context through CLI commands and MCP tools.
+            </p>
+          </div>
+          <div class="feature-grid">
+            <article class="feature-card">
+              <div class="icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M5 6c0-2 14-2 14 0v12c0 2-14 2-14 0V6Z" stroke="currentColor" stroke-width="2" />
+                  <path d="M5 10c0 2 14 2 14 0M5 14c0 2 14 2 14 0" stroke="currentColor" stroke-width="2" />
+                </svg>
+              </div>
+              <h3>Schema snapshots</h3>
+              <p>
+                Capture PostgreSQL and SQLite metadata into `.dbgraph/` with safe defaults and no
+                raw row storage unless explicitly enabled.
+              </p>
+            </article>
+            <article class="feature-card">
+              <div class="icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M6 7h4v4H6zM14 13h4v4h-4z" stroke="currentColor" stroke-width="2" />
+                  <path d="M10 9h4M12 11v3" stroke="currentColor" stroke-width="2" />
+                </svg>
+              </div>
+              <h3>Graph search and impact</h3>
+              <p>
+                Search tables, columns, SQL artifacts, inferred relations, and downstream impact
+                paths before editing database-dependent code.
+              </p>
+            </article>
+            <article class="feature-card">
+              <div class="icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M5 19V5h14v14H5Z" stroke="currentColor" stroke-width="2" />
+                  <path d="M8 10h8M8 14h5" stroke="currentColor" stroke-width="2" />
+                </svg>
+              </div>
+              <h3>Structured analysis reports</h3>
+              <p>
+                Review security, quality, SQL workload, and performance findings with evidence,
+                confidence, related objects, and suggested fixes.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="workflow">
+        <div class="container steps">
+          <div>
+            <h2>Quick workflow</h2>
+            <p class="lead">
+              Install once, initialize per project, then let agents ask database-structure questions
+              through MCP.
+            </p>
+          </div>
+          <div class="step-list">
+            <div class="step">
+              <strong>1. Install the CLI</strong>
+              <span>`install.sh` or `install.ps1` downloads the matching release binary.</span>
+            </div>
+            <div class="step">
+              <strong>2. Initialize `.dbgraph/`</strong>
+              <span>`dbgraph init -i --yes` writes config, snapshots, and instruction folders.</span>
+            </div>
+            <div class="step">
+              <strong>3. Configure your agent</strong>
+              <span>`dbgraph install --target codex --yes` writes a managed MCP entry.</span>
+            </div>
+            <div class="step">
+              <strong>4. Snapshot and analyze</strong>
+              <span>Run `dbgraph snapshot`, `search`, `impact`, `validate-sql`, and `analyze`.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="docs">
+        <div class="container">
+          <div class="section-header">
+            <h2>Docs built into the site</h2>
+            <p>
+              Start with the quickstart, then move into provider setup, CLI reference, MCP tools,
+              safety defaults, and the Chinese usage guide.
+            </p>
+          </div>
+          <div class="docs-layout">
+            <aside class="docs-sidebar" aria-label="Documentation">
+              <a href="docs/quickstart.html">Quickstart</a>
+              <a href="docs/usage.html">Usage Guide</a>
+              <a href="docs/usage-zh.html">中文说明</a>
+              <a href="docs/providers.html">Provider Capabilities</a>
+              <a href="docs/security.html">Security</a>
+              <a href="docs/release-matrix.html">Release Matrix</a>
+            </aside>
+            <div class="docs-body">
+              <h2>Use DbGraph from CLI or MCP</h2>
+              <p>
+                DbGraph keeps project-specific state in `.dbgraph/` and exposes stable read-only
+                commands for agent workflows.
+              </p>
+              <pre><code>dbgraph status
+dbgraph search customer --kind table
+dbgraph table public.orders
+dbgraph relations public.orders --depth 2
+dbgraph validate-sql --sql "select * from orders"
+dbgraph analyze --scope all --format markdown</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="container">
+          <div class="section-header">
+            <h2>Safety defaults</h2>
+            <p>
+              DbGraph is designed for local, read-only database reasoning. Snapshot is the command
+              that connects to the configured database; validation and analysis use local state.
+            </p>
+          </div>
+          <div class="safety">
+            <div class="safety-item">
+              <strong>Local-first</strong>
+              <span>Project state stays under `.dbgraph/`.</span>
+            </div>
+            <div class="safety-item">
+              <strong>No SQL execution</strong>
+              <span>`validate-sql` parses and checks references only.</span>
+            </div>
+            <div class="safety-item">
+              <strong>Masked samples</strong>
+              <span>Raw sample storage is off by default.</span>
+            </div>
+            <div class="safety-item">
+              <strong>Secret-aware errors</strong>
+              <span>Provider errors avoid printing sensitive connection strings.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <span>DbGraph - local-first database context for AI coding agents.</span>
+        <div class="footer-links">
+          <a href="docs/quickstart.html">Quickstart</a>
+          <a href="https://github.com/zhangsanfenggithub/dbgraph">GitHub</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>
