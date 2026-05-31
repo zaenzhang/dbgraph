@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use dbgraph_core::model::{DbEdgeKind, DbObject, DbObjectKind, DbSnapshot};
+use dbgraph_core::semantics::is_deprecated;
 use serde::{Deserialize, Serialize};
 
 mod data_profile;
@@ -452,6 +453,33 @@ fn quality_findings(snapshot: &DbSnapshot, findings: &mut Vec<AnalysisFinding>) 
             ));
         }
     }
+
+    let mut reported_deprecated = BTreeSet::new();
+    for edge in snapshot.edges.iter().filter(|edge| {
+        matches!(
+            edge.kind,
+            DbEdgeKind::ReadsFrom
+                | DbEdgeKind::FiltersBy
+                | DbEdgeKind::JoinsOn
+                | DbEdgeKind::WritesTo
+        )
+    }) {
+        let Some(object) = object_by_id(snapshot, &edge.to_object_id) else {
+            continue;
+        };
+        if !is_deprecated(&object.metadata) || !reported_deprecated.insert(object.id.clone()) {
+            continue;
+        }
+        findings.push(finding(
+            AnalysisScope::Quality,
+            FindingSeverity::Medium,
+            "quality.deprecated_object_used",
+            object,
+            "SQL workload references a deprecated semantic object",
+            format!("{} edge from {}", edge.kind.as_str(), edge.from_object_id),
+            related_object_names(snapshot, &[edge.from_object_id.as_str()]),
+        ));
+    }
 }
 
 fn performance_findings(snapshot: &DbSnapshot, findings: &mut Vec<AnalysisFinding>) {
@@ -795,6 +823,44 @@ mod tests {
             .iter()
             .any(|section| section.id == "data_profiling_business_rules"
                 && section.finding_count > 0));
+    }
+
+    #[test]
+    fn deprecated_semantic_objects_read_by_sql_create_quality_findings() {
+        let mut snapshot = sample_snapshot();
+        let status = snapshot
+            .objects
+            .iter_mut()
+            .find(|object| object.full_name == "public.orders.status")
+            .expect("status column should exist");
+        status.metadata.insert(
+            "semantic".to_owned(),
+            serde_json::json!({
+                "description": "Legacy order state",
+                "owner": "commerce",
+                "deprecated": true
+            }),
+        );
+        snapshot.edges.push(DbEdge::explicit(
+            "edge:query.status.read",
+            DbEdgeKind::ReadsFrom,
+            "query:orders",
+            "column:orders.status",
+        ));
+
+        let report = AnalysisAnalyzer::new().analyze(&snapshot, &AnalysisOptions::default());
+
+        let deprecated = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == "quality.deprecated_object_used")
+            .expect("deprecated semantic usage should be reported");
+        assert_eq!(deprecated.object, "public.orders.status");
+        assert_eq!(
+            deprecated.related_objects,
+            vec!["sql.sql/orders.sql:fingerprint"]
+        );
+        assert!(deprecated.suggested_fix.contains("replacement"));
     }
 
     #[allow(clippy::too_many_lines)]

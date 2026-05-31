@@ -239,6 +239,30 @@ dbgraph analyze --format markdown
 
 See [docs/configuration.md](docs/configuration.md) and [docs/security.md](docs/security.md) for the full policy.
 
+### Semantic Metadata
+
+Add `.dbgraph/semantics.json` when column names are not enough for an agent to understand business meaning:
+
+```json
+{
+  "version": 1,
+  "objects": [
+    {
+      "object": "public.orders.status",
+      "description": "Order lifecycle state",
+      "owner": "commerce",
+      "domain": "orders",
+      "sensitivity": "internal",
+      "allowedValues": ["pending", "paid", "shipped", "cancelled"],
+      "deprecated": false,
+      "certified": true
+    }
+  ]
+}
+```
+
+Run `dbgraph snapshot` after editing this file. DbGraph merges matching semantic metadata into snapshot objects, includes it in `context` and MCP context responses, and reports `quality.deprecated_object_used` when SQL artifacts still reference objects marked `deprecated: true`.
+
 ### Agent Value Benchmark
 
 `benchmark-agent` estimates the context cost and evidence coverage difference between raw project materials and DbGraph structured context. It is offline and deterministic; it does not call an LLM.

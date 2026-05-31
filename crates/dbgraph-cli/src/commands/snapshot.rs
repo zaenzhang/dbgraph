@@ -9,6 +9,7 @@ use dbgraph_core::profiling::{apply_profiling_policy, ProfilingMode, ProfilingOp
 use dbgraph_core::project::ProjectContext;
 use dbgraph_core::sampling::{SamplingOptions, SamplingStrategy};
 use dbgraph_core::security::{apply_pii_profiles, MaskingStrategy, PiiDetector, PiiRuleConfig};
+use dbgraph_core::semantics::SemanticMetadataConfig;
 use dbgraph_core::snapshot::{now_unix_ms, SnapshotStore};
 use dbgraph_core::sync::{plan_incremental_sync, SyncPlan};
 use dbgraph_core::{DbGraphError, Result};
@@ -131,6 +132,9 @@ fn capture_snapshot(
 
     let sql_artifacts = enrich_snapshot_with_sql(&mut snapshot, context)?;
     snapshot = apply_profiling_policy(snapshot, &profiling_options);
+    if let Some(semantics) = SemanticMetadataConfig::load_optional(context.semantics_path())? {
+        semantics.apply_to_snapshot(&mut snapshot)?;
+    }
     if config.security.mask_pii {
         let detector = PiiDetector::new(&PiiRuleConfig {
             custom_sensitive_terms: config.security.custom_sensitive_terms.clone(),

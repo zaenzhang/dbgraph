@@ -110,6 +110,14 @@ fn rule_metadata(rule_id: &str) -> RuleMetadata {
             confidence: 0.7,
             tags: &["quality", "constraint", "foreign_key"],
         },
+        "quality.deprecated_object_used" => RuleMetadata {
+            title: "Deprecated semantic object is still used",
+            description: "Project semantic metadata marks this object as deprecated, but SQL workload still references it.",
+            impact: "New work may continue depending on a field or table that the project intends to retire.",
+            suggested_fix: "Move callers to the documented replacement, or remove the deprecated marker if the object is still authoritative.",
+            confidence: 0.8,
+            tags: &["quality", "semantics", "deprecated"],
+        },
         "performance.filter_without_index" => RuleMetadata {
             title: "Filter without supporting index",
             description: "SQL workload filters by this column but no supporting index was found in the snapshot.",

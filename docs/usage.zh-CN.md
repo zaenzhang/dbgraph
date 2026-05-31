@@ -198,6 +198,36 @@ dbgraph analyze --format markdown
 
 当授权样本显示出 enum-like 但缺少约束、高空值率、金额类负数异常或 ID/code/email 等格式不稳定时，`analyze` 会增加 `Data Profiling & Business Rules` 报告分区。
 
+### 业务语义 Metadata
+
+如果字段名和表结构不足以表达业务含义，可以新增 `.dbgraph/semantics.json`：
+
+```json
+{
+  "version": 1,
+  "objects": [
+    {
+      "object": "public.orders.status",
+      "description": "订单生命周期状态",
+      "owner": "commerce",
+      "allowedValues": ["pending", "paid", "shipped", "cancelled"],
+      "deprecated": false,
+      "certified": true
+    }
+  ]
+}
+```
+
+修改后刷新 snapshot：
+
+```powershell
+dbgraph snapshot
+dbgraph context "order status"
+dbgraph analyze --scope quality
+```
+
+`context` 和 MCP context 响应会包含这些语义信息。如果某个对象被标记为 `deprecated: true`，但 SQL artifact 仍然引用它，`analyze` 会报告 `quality.deprecated_object_used`。
+
 ## SQL Artifact
 
 生成 snapshot 时，DbGraph 默认扫描这些目录下的 `.sql` 文件：

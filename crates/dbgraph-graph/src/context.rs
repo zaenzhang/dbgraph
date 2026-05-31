@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use dbgraph_core::model::{DbObject, DbSnapshot};
+use dbgraph_core::semantics::{semantic_description, semantic_metadata};
 use serde::{Deserialize, Serialize};
 
 use crate::search::{extract_search_terms, search_snapshot, SearchOptions};
@@ -78,6 +79,9 @@ pub struct ContextObject {
     pub kind: String,
     /// Full name.
     pub full_name: String,
+    /// Project-owned semantic metadata when configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic: Option<serde_json::Value>,
     /// Summary.
     pub summary: String,
     /// Score.
@@ -238,6 +242,7 @@ fn select_context_objects(
         context_objects.push(ContextObject {
             kind: object.kind.as_str().to_owned(),
             full_name: object.full_name,
+            semantic: semantic_metadata(&object.metadata).cloned(),
             summary,
             score,
         });
@@ -276,6 +281,9 @@ fn relation_paths(snapshot: &DbSnapshot, context_objects: &[ContextObject]) -> V
 }
 
 fn object_summary(object: &DbObject) -> String {
+    if let Some(description) = semantic_description(&object.metadata) {
+        return description.to_owned();
+    }
     object
         .metadata
         .get("comment")
@@ -318,6 +326,49 @@ mod tests {
         assert!(names.contains(&"public.orders"));
         assert!(context.estimated_tokens <= 80);
         assert!(!context.ranking_notes.is_empty());
+    }
+
+    #[test]
+    fn context_object_includes_semantic_metadata_when_present() {
+        let mut snapshot = sample_snapshot();
+        let orders = snapshot
+            .objects
+            .iter_mut()
+            .find(|object| object.full_name == "public.orders")
+            .expect("orders table should exist");
+        orders.metadata.insert(
+            "semantic".to_owned(),
+            serde_json::json!({
+                "description": "Commercial order aggregate",
+                "owner": "commerce",
+                "certified": true
+            }),
+        );
+
+        let context = ContextBuilder::new(RankingWeights::default()).build(
+            &snapshot,
+            "orders",
+            &ContextOptions {
+                token_budget: 120,
+                max_objects: 3,
+            },
+        );
+
+        let orders = context
+            .objects
+            .iter()
+            .find(|object| object.full_name == "public.orders")
+            .expect("orders should be selected");
+
+        assert_eq!(
+            orders
+                .semantic
+                .as_ref()
+                .and_then(|metadata| metadata.get("description"))
+                .and_then(serde_json::Value::as_str),
+            Some("Commercial order aggregate")
+        );
+        assert!(orders.summary.contains("Commercial order aggregate"));
     }
 
     fn sample_snapshot() -> DbSnapshot {
