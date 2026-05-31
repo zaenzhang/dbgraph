@@ -8,7 +8,7 @@ DbGraph is designed to be schema-first and local by default.
 - Raw samples are not stored.
 - PII masking is enabled.
 - `snapshot.profilingMode` defaults to `schema`.
-- Sampling requires explicit `profilingMode: "sample"` or `dbgraph snapshot --profile sample`.
+- Sampling requires both `profilingMode: "sample"` or `dbgraph snapshot --profile sample` and a matching `dataAccess` allowlist rule.
 
 ## PII Detection
 
@@ -29,7 +29,42 @@ Sensitive columns receive a `piiScore` in column profiles. Sample summaries mask
 
 ## Sampling Policy
 
-Safe sampling is bounded by `snapshot.maxRowsPerTable`. Providers should use deterministic limit sampling or random sampling with a statement timeout. Stored sample summaries should contain counts, masked examples, and no sensitive raw values.
+Safe sampling is allowlist-only. DbGraph reads business row values only during `dbgraph snapshot --profile sample` or equivalent sample-mode config, and only for columns listed in a matching `dataAccess.tables[]` rule.
+
+Sampling is bounded by `snapshot.maxRowsPerTable` and by any lower per-rule `limit`. PostgreSQL and SQLite use deterministic `LIMIT` sampling with an optional configured read-only `where` clause. Stored sample summaries contain counts, masked examples, inferred shape, basic numeric range, observed format shapes, and source metadata.
+
+Raw examples are not stored unless a table rule sets `storeRawValues: true`. Sensitive-looking values are still masked when `security.maskPii` is true.
+
+Example:
+
+```json
+{
+  "snapshot": {
+    "profilingMode": "sample",
+    "maxRowsPerTable": 50,
+    "sampleRows": true
+  },
+  "dataAccess": {
+    "defaultMode": "schemaOnly",
+    "tables": [
+      {
+        "pattern": "public.orders",
+        "mode": "sample",
+        "columns": ["status", "created_at"],
+        "where": "created_at >= now() - interval '30 days'",
+        "limit": 50,
+        "storeRawValues": false
+      },
+      {
+        "pattern": "public.payments",
+        "mode": "schemaOnly"
+      }
+    ]
+  }
+}
+```
+
+`schemaOnly` tables keep schema and SQL lineage analysis but never read row values.
 
 ## Local Files To Protect
 

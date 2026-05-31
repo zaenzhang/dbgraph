@@ -58,10 +58,10 @@ The current Postgres teashop smoke run produced:
 
 | Metric | Baseline | DbGraph | Delta |
 | --- | ---: | ---: | ---: |
-| Estimated tokens | 67,326 | 6,324 | -90.6% |
+| Estimated tokens | 70,668 | 7,329 | -89.6% |
 | Retrieval steps | 12 | 12 | 0 |
 | Evidence recall | baseline | +0.17 | +0.17 |
-| Relevant object precision | baseline | +0.07 | +0.07 |
+| Relevant object precision | baseline | +0.06 | +0.06 |
 
 The benchmark verified evidence for:
 

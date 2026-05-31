@@ -7,8 +7,8 @@ build because this development machine does not have those services installed.
 
 | Provider | Schema | Constraints | Indexes | Views | Routines | Triggers | Statistics | Sampling | Status |
 |---|---|---|---|---|---|---|---|---|---|
-| `postgres` | supported | supported | supported | supported | supported | supported | supported | unsupported | implemented |
-| `sqlite` | supported | supported | supported | supported | unsupported | unsupported | supported | unsupported | implemented |
+| `postgres` | supported | supported | supported | supported | supported | supported | supported | supported | implemented |
+| `sqlite` | supported | supported | supported | supported | unsupported | unsupported | supported | supported | implemented |
 | `mysql` | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | skipped in this build |
 | `sql-server` | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported | skipped in this build |
 
@@ -19,5 +19,6 @@ Rules:
   panics or missing registry entries.
 - Context, search, relation, and impact code must tolerate unsupported optional
   capabilities.
-- DbGraph still does not store raw business row data by default. SQLite table
-  counts use `COUNT(*)` only and do not read row values into snapshots.
+- DbGraph still does not read or store raw business row data by default.
+  PostgreSQL and SQLite sampling only run in sample profile mode with matching
+  `dataAccess` allowlist rules, and only for configured columns.

@@ -24,8 +24,32 @@ function Invoke-DbGraphCli {
 try {
   Push-Location $work
   Invoke-DbGraphCli @("init", "-i", "--yes") | Out-Null
+  $configPath = Join-Path $work ".dbgraph/dbgraph.config.json"
+  $config = Get-Content -Raw -Path $configPath | ConvertFrom-Json
+  $config.snapshot.profilingMode = "sample"
+  $config.snapshot.maxRowsPerTable = 20
+  $config.snapshot.sampleRows = $true
+  $config | Add-Member -Force -NotePropertyName "dataAccess" -NotePropertyValue ([pscustomobject]@{
+    defaultMode = "schemaOnly"
+    tables = @(
+      [pscustomobject]@{
+        pattern = "public.orders"
+        mode = "sample"
+        columns = @("status", "created_at")
+        where = "created_at >= now() - interval '30 days'"
+        limit = 10
+        storeRawValues = $true
+      },
+      [pscustomobject]@{
+        pattern = "public.payments"
+        mode = "schemaOnly"
+      }
+    )
+  })
+  $configJson = $config | ConvertTo-Json -Depth 10
+  [System.IO.File]::WriteAllText($configPath, $configJson, [System.Text.UTF8Encoding]::new($false))
   Invoke-DbGraphCli @("doctor") | Out-Null
-  Invoke-DbGraphCli @("snapshot", "--profile", "stats") | Out-Null
+  Invoke-DbGraphCli @("snapshot", "--profile", "sample") | Out-Null
   Invoke-DbGraphCli @("doctor", "--check-db") | Out-Null
   Invoke-DbGraphCli @("search", "orders", "--kind", "table") | Out-Null
   Invoke-DbGraphCli @("validate-sql", "--sql", "select * from orders") | Out-Null
@@ -39,6 +63,12 @@ try {
   }
   if ($analysis -notmatch "public\.orders\.status") {
     throw "analysis smoke missing expected orders status performance finding"
+  }
+  if ($analysis -notmatch "data\.enum_like_without_constraint") {
+    throw "analysis smoke missing sample-derived data profiling finding"
+  }
+  if ($analysis -notmatch "Data Profiling") {
+    throw "analysis smoke missing data profiling section"
   }
   if ($analysis -notmatch "suggestedFix") {
     throw "analysis smoke missing suggested fixes"

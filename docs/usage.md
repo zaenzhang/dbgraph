@@ -99,6 +99,7 @@ The config has four top-level sections:
 - `snapshot`: JSON formatting, profiling depth, and sample limits.
 - `security`: raw-data storage, sample masking, and custom sensitive terms.
 - `mcp`: MCP enablement and response budget.
+- `dataAccess`: explicit table/column allowlist for business-row sampling.
 
 ### PostgreSQL
 
@@ -155,9 +156,54 @@ Profile modes:
 
 - `schema`: schema-only metadata; safest default.
 - `stats`: provider/catalog statistics such as row estimates.
-- `sample`: explicit opt-in sampling; masked by default.
+- `sample`: enables allowlisted row sampling only when `dataAccess` also permits it; masked by default.
 
 Snapshot output is written under `.dbgraph/snapshots/`, and the local graph index is rebuilt into `.dbgraph/dbgraph.db`.
+
+### Allowlisted Data Profiling
+
+By default, DbGraph does not read business row values. To analyze bounded samples for business-rule signals, enable sample profiling and allowlist exact columns:
+
+This is also the recommended way to filter database exposure for AI agents:
+tables can remain `schemaOnly` for structure and lineage, while only approved
+tables/columns use `sample`. The generated graph context and analysis reports
+reuse those authorized summaries and do not query additional row values.
+
+```json
+{
+  "snapshot": {
+    "profilingMode": "sample",
+    "maxRowsPerTable": 50,
+    "sampleRows": true
+  },
+  "dataAccess": {
+    "defaultMode": "schemaOnly",
+    "tables": [
+      {
+        "pattern": "public.orders",
+        "mode": "sample",
+        "columns": ["status", "created_at"],
+        "where": "created_at >= now() - interval '30 days'",
+        "limit": 50,
+        "storeRawValues": false
+      },
+      {
+        "pattern": "public.payments",
+        "mode": "schemaOnly"
+      }
+    ]
+  }
+}
+```
+
+Then run:
+
+```powershell
+dbgraph snapshot --profile sample
+dbgraph analyze --format markdown
+```
+
+`analyze` adds a `Data Profiling & Business Rules` section when allowlisted sample summaries reveal enum-like unconstrained values, high null rates, negative metric-like values, or unstable identifier formats.
 
 ## SQL Artifacts
 

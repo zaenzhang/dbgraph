@@ -6,6 +6,14 @@ use std::str::FromStr;
 use dbgraph_core::model::{DbEdgeKind, DbObject, DbObjectKind, DbSnapshot};
 use serde::{Deserialize, Serialize};
 
+mod data_profile;
+mod findings;
+mod sections;
+
+use data_profile::data_profile_findings;
+use findings::finding;
+use sections::{build_sections, overview_summary, risk_score};
+
 /// Analysis scope.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -234,6 +242,7 @@ impl AnalysisAnalyzer {
         }
         if includes(options.scope, AnalysisScope::Quality) {
             quality_findings(snapshot, &mut findings);
+            data_profile_findings(snapshot, &mut findings);
         }
         if includes(options.scope, AnalysisScope::Performance) {
             performance_findings(snapshot, &mut findings);
@@ -478,89 +487,6 @@ fn performance_findings(snapshot: &DbSnapshot, findings: &mut Vec<AnalysisFindin
     }
 }
 
-fn risk_score(findings: &[AnalysisFinding]) -> u32 {
-    findings
-        .iter()
-        .map(|finding| match finding.severity {
-            FindingSeverity::Critical => 25,
-            FindingSeverity::High => 10,
-            FindingSeverity::Medium => 5,
-            FindingSeverity::Low => 1,
-        })
-        .sum()
-}
-
-fn overview_summary(total_findings: usize, risk_score: u32) -> String {
-    if total_findings == 0 {
-        "No risk, quality, or performance findings were detected.".to_owned()
-    } else {
-        format!("{total_findings} findings detected with risk score {risk_score}.")
-    }
-}
-
-fn build_sections(findings: &[AnalysisFinding]) -> Vec<AnalysisSection> {
-    [
-        (
-            "security_privacy",
-            "Security & Privacy",
-            "sensitive data exposure and risky SQL access patterns.",
-        ),
-        (
-            "data_integrity_schema_quality",
-            "Data Integrity & Schema Quality",
-            "Schema constraints and relationship quality issues.",
-        ),
-        (
-            "sql_workload_safety",
-            "SQL Workload & Safety",
-            "SQL write patterns that can affect more rows than intended.",
-        ),
-        (
-            "performance",
-            "Performance",
-            "Query workload patterns that may need supporting indexes.",
-        ),
-    ]
-    .into_iter()
-    .map(|(id, title, summary)| {
-        let section_findings = findings
-            .iter()
-            .filter(|finding| finding_belongs_to_section(finding, id));
-        let mut severity_counts = BTreeMap::new();
-        let mut finding_count = 0;
-        for finding in section_findings {
-            finding_count += 1;
-            *severity_counts
-                .entry(finding.severity.label().to_owned())
-                .or_insert(0) += 1;
-        }
-        AnalysisSection {
-            id: id.to_owned(),
-            title: title.to_owned(),
-            summary: summary.to_owned(),
-            finding_count,
-            severity_counts,
-        }
-    })
-    .collect()
-}
-
-fn finding_belongs_to_section(finding: &AnalysisFinding, section_id: &str) -> bool {
-    match section_id {
-        "security_privacy" => {
-            finding.scope == AnalysisScope::Risk
-                && (finding.rule_id.contains("sensitive") || finding.rule_id == "risk.select_star")
-        }
-        "data_integrity_schema_quality" => finding.scope == AnalysisScope::Quality,
-        "sql_workload_safety" => matches!(
-            finding.rule_id.as_str(),
-            "risk.update_without_where" | "risk.delete_without_where"
-        ),
-        "performance" => finding.scope == AnalysisScope::Performance,
-        _ => false,
-    }
-}
-
 fn foreign_key_columns(snapshot: &DbSnapshot) -> BTreeSet<String> {
     snapshot
         .objects
@@ -700,136 +626,6 @@ fn preview_sql(sql: &str) -> String {
     sql.chars().take(160).collect()
 }
 
-fn finding(
-    scope: AnalysisScope,
-    severity: FindingSeverity,
-    rule_id: &str,
-    object: &DbObject,
-    message: &str,
-    evidence: String,
-    related_objects: Vec<String>,
-) -> AnalysisFinding {
-    let metadata = rule_metadata(rule_id);
-    let fingerprint = finding_fingerprint(rule_id, &object.full_name, &related_objects);
-    AnalysisFinding {
-        scope,
-        severity,
-        rule_id: rule_id.to_owned(),
-        object: object.full_name.clone(),
-        message: message.to_owned(),
-        evidence,
-        title: metadata.title.to_owned(),
-        description: metadata.description.to_owned(),
-        impact: metadata.impact.to_owned(),
-        suggested_fix: metadata.suggested_fix.to_owned(),
-        confidence: metadata.confidence,
-        tags: metadata.tags.iter().map(|tag| (*tag).to_owned()).collect(),
-        related_objects,
-        fingerprint,
-    }
-}
-
-fn finding_fingerprint(rule_id: &str, object: &str, related_objects: &[String]) -> String {
-    let mut related = related_objects.to_vec();
-    related.sort();
-    related.dedup();
-    format!("{rule_id}|{object}|{}", related.join(","))
-}
-
-struct RuleMetadata {
-    title: &'static str,
-    description: &'static str,
-    impact: &'static str,
-    suggested_fix: &'static str,
-    confidence: f64,
-    tags: &'static [&'static str],
-}
-
-fn rule_metadata(rule_id: &str) -> RuleMetadata {
-    match rule_id {
-        "risk.sensitive_column" => RuleMetadata {
-            title: "Sensitive column detected",
-            description: "Column profiling indicates likely PII or secret-bearing data.",
-            impact: "Uncontrolled reads can create privacy, compliance, or credential exposure risk.",
-            suggested_fix: "Review access controls, mask or redact this value in downstream outputs, and avoid broad SELECT * projections.",
-            confidence: 0.9,
-            tags: &["risk", "pii", "privacy"],
-        },
-        "risk.query_reads_sensitive_column" => RuleMetadata {
-            title: "SQL reads sensitive column",
-            description: "A SQL artifact references a column with elevated PII score.",
-            impact: "Application or analytics code may propagate sensitive data beyond its intended boundary.",
-            suggested_fix: "Project only required columns, mask sensitive values where possible, and review the related SQL artifact.",
-            confidence: 0.85,
-            tags: &["risk", "pii", "sql"],
-        },
-        "risk.select_star" => RuleMetadata {
-            title: "SELECT * query detected",
-            description: "The SQL artifact selects all columns from at least one source.",
-            impact: "Future schema changes can silently expose new columns or increase query cost.",
-            suggested_fix: "Replace SELECT * with explicit column projection and exclude sensitive or unused fields.",
-            confidence: 0.8,
-            tags: &["risk", "sql", "projection"],
-        },
-        "risk.update_without_where" => RuleMetadata {
-            title: "UPDATE without WHERE",
-            description: "The SQL artifact contains an UPDATE statement without a WHERE clause.",
-            impact: "A broad update can unintentionally modify every row in the target table.",
-            suggested_fix: "Add a WHERE clause, batch limit, transaction guard, or explicit operator confirmation before execution.",
-            confidence: 0.9,
-            tags: &["risk", "sql", "write"],
-        },
-        "risk.delete_without_where" => RuleMetadata {
-            title: "DELETE without WHERE",
-            description: "The SQL artifact contains a DELETE statement without a WHERE clause.",
-            impact: "A broad delete can unintentionally remove every row in the target table.",
-            suggested_fix: "Add a WHERE clause, batch limit, transaction guard, or explicit operator confirmation before execution.",
-            confidence: 0.9,
-            tags: &["risk", "sql", "write"],
-        },
-        "quality.missing_primary_key" => RuleMetadata {
-            title: "Missing primary key",
-            description: "The table has no primary key constraint in the snapshot.",
-            impact: "Rows may be hard to address reliably, and downstream sync or update logic can become ambiguous.",
-            suggested_fix: "Add a primary key, or document the table as append-only, staging, or intentionally keyless.",
-            confidence: 0.85,
-            tags: &["quality", "constraint", "primary_key"],
-        },
-        "quality.probable_missing_fk" => RuleMetadata {
-            title: "Probable missing foreign key",
-            description: "A column name looks like a foreign key but no FK constraint or reference edge was found.",
-            impact: "Relationship integrity may rely on application code and can drift over time.",
-            suggested_fix: "Add an explicit foreign key if the relationship is required, or document the denormalized design choice.",
-            confidence: 0.7,
-            tags: &["quality", "constraint", "foreign_key"],
-        },
-        "performance.filter_without_index" => RuleMetadata {
-            title: "Filter without supporting index",
-            description: "SQL workload filters by this column but no supporting index was found in the snapshot.",
-            impact: "Frequent filters can degrade into table scans as data volume grows.",
-            suggested_fix: "Validate selectivity with EXPLAIN, then consider CREATE INDEX CONCURRENTLY on the filtered column for Postgres.",
-            confidence: 0.75,
-            tags: &["performance", "index", "filter"],
-        },
-        "performance.join_without_index" => RuleMetadata {
-            title: "Join without supporting index",
-            description: "SQL workload joins on this column but no supporting index was found in the snapshot.",
-            impact: "Join-heavy paths can become slower as related tables grow.",
-            suggested_fix: "Validate join cardinality with EXPLAIN, then consider CREATE INDEX CONCURRENTLY on the join column for Postgres.",
-            confidence: 0.75,
-            tags: &["performance", "index", "join"],
-        },
-        _ => RuleMetadata {
-            title: "Analysis finding",
-            description: "DbGraph detected a database graph condition that needs review.",
-            impact: "The finding may affect data safety, quality, or performance.",
-            suggested_fix: "Review the object, evidence, and related schema or SQL artifacts before changing production systems.",
-            confidence: 0.5,
-            tags: &["analysis"],
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::analysis::{AnalysisAnalyzer, AnalysisOptions, AnalysisScope, FindingSeverity};
@@ -959,6 +755,46 @@ mod tests {
             .findings
             .iter()
             .all(|finding| finding.scope == AnalysisScope::Quality));
+    }
+
+    #[test]
+    fn sample_summaries_create_data_profiling_findings() {
+        let mut snapshot = sample_snapshot();
+        snapshot.column_profiles.push(ColumnProfile {
+            object_id: "column:orders.status".to_owned(),
+            data_type_family: Some("text".to_owned()),
+            null_fraction: None,
+            distinct_estimate: None,
+            pii_score: None,
+            profile: [(
+                "sampleSummary".to_owned(),
+                serde_json::json!({
+                    "column": "public.orders.status",
+                    "observedNonNull": 5,
+                    "observedNull": 0,
+                    "distinctCount": 3,
+                    "sensitive": false,
+                    "examples": ["open", "paid", "cancelled"],
+                    "inferredShape": "enum_like",
+                    "source": "sample"
+                }),
+            )]
+            .into_iter()
+            .collect(),
+        });
+
+        let report = AnalysisAnalyzer::new().analyze(&snapshot, &AnalysisOptions::default());
+
+        assert!(report.findings.iter().any(|finding| {
+            finding.rule_id == "data.enum_like_without_constraint"
+                && finding.object == "public.orders.status"
+                && finding.tags.iter().any(|tag| tag == "data_profile")
+        }));
+        assert!(report
+            .sections
+            .iter()
+            .any(|section| section.id == "data_profiling_business_rules"
+                && section.finding_count > 0));
     }
 
     #[allow(clippy::too_many_lines)]

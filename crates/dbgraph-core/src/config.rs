@@ -7,6 +7,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::data_access::{DataAccessConfig, DataAccessMode, DataAccessTableRule};
 use crate::profiling::{ProfilingMode, ProfilingOptions};
 use crate::project::ProjectContext;
 use crate::{DbGraphError, Result};
@@ -191,6 +192,9 @@ pub struct DbGraphConfig {
     pub security: SecurityConfig,
     /// MCP settings.
     pub mcp: McpConfig,
+    /// Explicit business-row access policy.
+    #[serde(default)]
+    pub data_access: DataAccessConfig,
 }
 
 impl Default for DbGraphConfig {
@@ -201,6 +205,7 @@ impl Default for DbGraphConfig {
             snapshot: SnapshotConfig::default(),
             security: SecurityConfig::default(),
             mcp: McpConfig::default(),
+            data_access: DataAccessConfig::default(),
         }
     }
 }
@@ -328,6 +333,11 @@ impl DbGraphConfig {
                 "mcp.maxResponseChars must be greater than zero",
             ));
         }
+
+        self.data_access.validate(
+            self.snapshot.profiling_mode,
+            self.snapshot.max_rows_per_table,
+        )?;
 
         Ok(())
     }
@@ -475,6 +485,109 @@ mod tests {
             .expect_err("sample rows should require sample profile mode");
 
         assert!(err.to_string().contains("profilingMode"));
+    }
+
+    #[test]
+    fn default_data_access_is_schema_only() {
+        let config = DbGraphConfig::default();
+
+        assert_eq!(config.data_access.default_mode, DataAccessMode::SchemaOnly);
+        assert!(config.data_access.tables.is_empty());
+    }
+
+    #[test]
+    fn sample_data_access_requires_sample_profile_mode_and_columns() {
+        let config = DbGraphConfig {
+            data_access: DataAccessConfig {
+                tables: vec![DataAccessTableRule {
+                    pattern: "public.orders".to_owned(),
+                    mode: DataAccessMode::Sample,
+                    columns: vec!["status".to_owned()],
+                    limit: Some(5),
+                    ..DataAccessTableRule::default()
+                }],
+                ..DataAccessConfig::default()
+            },
+            ..DbGraphConfig::default()
+        };
+
+        let err = config
+            .validate()
+            .expect_err("sample access should require sample profiling");
+
+        assert!(err.to_string().contains("profilingMode"));
+
+        let config = DbGraphConfig {
+            snapshot: SnapshotConfig {
+                profiling_mode: ProfilingMode::Sample,
+                ..SnapshotConfig::default()
+            },
+            data_access: DataAccessConfig {
+                tables: vec![DataAccessTableRule {
+                    pattern: "public.orders".to_owned(),
+                    mode: DataAccessMode::Sample,
+                    columns: Vec::new(),
+                    limit: Some(5),
+                    ..DataAccessTableRule::default()
+                }],
+                ..DataAccessConfig::default()
+            },
+            ..DbGraphConfig::default()
+        };
+
+        let err = config
+            .validate()
+            .expect_err("sample access should require columns");
+
+        assert!(err.to_string().contains("columns"), "{err}");
+    }
+
+    #[test]
+    fn sample_data_access_rejects_unsafe_where_and_excessive_limit() {
+        let config = DbGraphConfig {
+            snapshot: SnapshotConfig {
+                profiling_mode: ProfilingMode::Sample,
+                max_rows_per_table: 10,
+                ..SnapshotConfig::default()
+            },
+            data_access: DataAccessConfig {
+                tables: vec![DataAccessTableRule {
+                    pattern: "public.orders".to_owned(),
+                    mode: DataAccessMode::Sample,
+                    columns: vec!["status".to_owned()],
+                    where_clause: Some("status = 'paid'; DROP TABLE users".to_owned()),
+                    limit: Some(5),
+                    ..DataAccessTableRule::default()
+                }],
+                ..DataAccessConfig::default()
+            },
+            ..DbGraphConfig::default()
+        };
+
+        let err = config.validate().expect_err("unsafe where should fail");
+        assert!(err.to_string().contains("where"));
+
+        let config = DbGraphConfig {
+            snapshot: SnapshotConfig {
+                profiling_mode: ProfilingMode::Sample,
+                max_rows_per_table: 10,
+                ..SnapshotConfig::default()
+            },
+            data_access: DataAccessConfig {
+                tables: vec![DataAccessTableRule {
+                    pattern: "public.orders".to_owned(),
+                    mode: DataAccessMode::Sample,
+                    columns: vec!["status".to_owned()],
+                    limit: Some(11),
+                    ..DataAccessTableRule::default()
+                }],
+                ..DataAccessConfig::default()
+            },
+            ..DbGraphConfig::default()
+        };
+
+        let err = config.validate().expect_err("excessive limit should fail");
+        assert!(err.to_string().contains("limit"));
     }
 
     struct TempProject {

@@ -3,16 +3,22 @@
 use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
+use dbgraph_core::config::DataAccessConfig;
 use dbgraph_core::model::{
     CapabilityStatus, ColumnMetadata, ColumnProfile, ConstraintMetadata, DbEdge, DbEdgeKind,
     DbObject, DbObjectKind, DbSnapshot, Evidence, IndexMetadata, Metadata, ProviderCapabilities,
     TableMetadata, TableProfile,
 };
+use dbgraph_core::sampling::SamplingOptions;
 use dbgraph_core::{DbGraphError, Result};
 use postgres::{Client, NoTls};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use url::Url;
+
+mod sampling;
+use sampling::apply_postgres_samples;
+pub use sampling::build_sample_query;
 
 /// Runtime connection settings for provider snapshot extraction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +92,19 @@ pub trait DatabaseProvider {
     ///
     /// Returns an error when connection or catalog extraction fails.
     fn snapshot(&self, config: &ProviderConnectionConfig) -> Result<DbSnapshot>;
+    /// Captures a snapshot and applies explicit allowlisted row sampling when supported.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when connection, catalog extraction, or sampling fails.
+    fn snapshot_with_data_access(
+        &self,
+        config: &ProviderConnectionConfig,
+        _data_access: &DataAccessConfig,
+        _sampling: &SamplingOptions,
+    ) -> Result<DbSnapshot> {
+        self.snapshot(config)
+    }
 }
 
 /// Provider registry.
@@ -124,7 +143,7 @@ impl DatabaseProvider for PostgresProvider {
             routines: CapabilityStatus::Supported,
             triggers: CapabilityStatus::Supported,
             statistics: CapabilityStatus::Supported,
-            sampling: CapabilityStatus::Unsupported,
+            sampling: CapabilityStatus::Supported,
         }
     }
 
@@ -140,6 +159,21 @@ impl DatabaseProvider for PostgresProvider {
         let info = read_connection_info(&mut client)?;
         let raw = extract_raw_schema(&mut client, self.capabilities(), &info.database_name)?;
         Ok(canonicalize_raw_snapshot(raw))
+    }
+
+    fn snapshot_with_data_access(
+        &self,
+        config: &ProviderConnectionConfig,
+        data_access: &DataAccessConfig,
+        sampling: &SamplingOptions,
+    ) -> Result<DbSnapshot> {
+        let mut client = connect_postgres(config)?;
+        setup_read_only_session(&mut client, config)?;
+        let info = read_connection_info(&mut client)?;
+        let raw = extract_raw_schema(&mut client, self.capabilities(), &info.database_name)?;
+        let mut snapshot = canonicalize_raw_snapshot(raw);
+        apply_postgres_samples(&mut client, &mut snapshot, data_access, sampling)?;
+        Ok(snapshot)
     }
 }
 
@@ -1158,6 +1192,10 @@ fn metadata<const N: usize>(pairs: [(&str, serde_json::Value); N]) -> Metadata {
         .collect()
 }
 
+pub(super) fn quote_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
 fn qualified(schema: &str, name: &str) -> String {
     format!("{schema}.{name}")
 }
@@ -1236,7 +1274,7 @@ fn redact_connection_url(value: &str) -> String {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn pg_error(source: postgres::Error) -> DbGraphError {
+pub(super) fn pg_error(source: postgres::Error) -> DbGraphError {
     DbGraphError::Internal {
         message: format!("PostgreSQL introspection error: {source}"),
     }

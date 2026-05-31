@@ -2,10 +2,15 @@
 
 use std::path::{Path, PathBuf};
 
+use dbgraph_core::config::DataAccessConfig;
 use dbgraph_core::model::{CapabilityStatus, DbSnapshot, ProviderCapabilities};
+use dbgraph_core::sampling::SamplingOptions;
 use dbgraph_core::{DbGraphError, Result};
 use rusqlite::Connection;
 use url::Url;
+
+mod sampling;
+use sampling::apply_sqlite_samples;
 
 use crate::postgres::{
     canonicalize_raw_snapshot, ConnectionInfo, DatabaseProvider, ProviderConnectionConfig,
@@ -48,6 +53,21 @@ impl DatabaseProvider for SqliteProvider {
         let raw = extract_raw_schema(&connection, &path, self.capabilities())?;
         Ok(canonicalize_raw_snapshot(raw))
     }
+
+    fn snapshot_with_data_access(
+        &self,
+        config: &ProviderConnectionConfig,
+        data_access: &DataAccessConfig,
+        sampling: &SamplingOptions,
+    ) -> Result<DbSnapshot> {
+        let path = sqlite_path(&config.url)?;
+        reject_internal_dbgraph_storage(&path)?;
+        let connection = open_read_only(&path)?;
+        let raw = extract_raw_schema(&connection, &path, self.capabilities())?;
+        let mut snapshot = canonicalize_raw_snapshot(raw);
+        apply_sqlite_samples(&connection, &mut snapshot, data_access, sampling)?;
+        Ok(snapshot)
+    }
 }
 
 fn sqlite_capabilities() -> ProviderCapabilities {
@@ -59,7 +79,7 @@ fn sqlite_capabilities() -> ProviderCapabilities {
         routines: CapabilityStatus::Unsupported,
         triggers: CapabilityStatus::Unsupported,
         statistics: CapabilityStatus::Supported,
-        sampling: CapabilityStatus::Unsupported,
+        sampling: CapabilityStatus::Supported,
     }
 }
 
@@ -383,7 +403,7 @@ fn sqlite_type_family(data_type: &str) -> &'static str {
     }
 }
 
-fn quote_identifier(value: &str) -> String {
+pub(super) fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
@@ -400,7 +420,7 @@ fn database_name(path: &Path) -> String {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn sqlite_error(source: rusqlite::Error) -> DbGraphError {
+pub(super) fn sqlite_error(source: rusqlite::Error) -> DbGraphError {
     DbGraphError::Internal {
         message: format!("SQLite introspection error: {source}"),
     }

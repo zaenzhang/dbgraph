@@ -2,6 +2,7 @@
 
 pub mod benchmark;
 pub mod config;
+pub mod data_access;
 pub mod diff;
 pub mod model;
 pub mod profiling;
