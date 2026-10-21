@@ -359,9 +359,15 @@ fn risk_findings(snapshot: &DbSnapshot, findings: &mut Vec<AnalysisFinding>) {
                 Vec::new(),
             ));
         }
-        if (upper.starts_with("UPDATE ") || upper.contains("; UPDATE "))
-            && !statement_has_where(&upper, "UPDATE")
-        {
+        let dialect = match snapshot.provider.as_str() {
+            "postgres" => dbgraph_sql::SqlDialect::Postgres,
+            "mysql" => dbgraph_sql::SqlDialect::MySql,
+            _ => dbgraph_sql::SqlDialect::Generic,
+        };
+        let unsafe_writes = dbgraph_sql::analyze_sql(&sql, dialect)
+            .expect("SQL analysis returns syntax failures as diagnostics")
+            .unsafe_writes;
+        if unsafe_writes.iter().any(|kind| kind == "update") {
             findings.push(finding(
                 AnalysisScope::Risk,
                 FindingSeverity::High,
@@ -372,9 +378,7 @@ fn risk_findings(snapshot: &DbSnapshot, findings: &mut Vec<AnalysisFinding>) {
                 Vec::new(),
             ));
         }
-        if (upper.starts_with("DELETE ") || upper.contains("; DELETE "))
-            && !statement_has_where(&upper, "DELETE")
-        {
+        if unsafe_writes.iter().any(|kind| kind == "delete") {
             findings.push(finding(
                 AnalysisScope::Risk,
                 FindingSeverity::High,
@@ -644,12 +648,6 @@ fn normalized_sql(query: &DbObject) -> String {
         .to_owned()
 }
 
-fn statement_has_where(sql: &str, keyword: &str) -> bool {
-    sql.split(';')
-        .filter(|statement| statement.trim_start().starts_with(keyword))
-        .all(|statement| statement.contains(" WHERE "))
-}
-
 fn preview_sql(sql: &str) -> String {
     sql.chars().take(160).collect()
 }
@@ -783,6 +781,95 @@ mod tests {
             .findings
             .iter()
             .all(|finding| finding.scope == AnalysisScope::Quality));
+    }
+
+    #[test]
+    fn write_risk_uses_each_statement_outer_where_clause() {
+        for (sql, update, delete) in [
+            (
+                "update orders set status=(select email from customers where id=1)",
+                true,
+                false,
+            ),
+            (
+                "with c as (select id from customers where id=1) delete from orders",
+                false,
+                true,
+            ),
+            ("update orders set status=' WHERE '", true, false),
+            (
+                "update orders set status='x' where id=1; delete from orders",
+                false,
+                true,
+            ),
+            (
+                "update orders set status=(select email from customers where id=1) where id=1",
+                false,
+                false,
+            ),
+        ] {
+            let mut snapshot = DbSnapshot::new("s1", "postgres", "app", 1);
+            let mut query = DbObject::new("query:write", DbObjectKind::Query, "sql.write.sql");
+            query
+                .metadata
+                .insert("normalizedSql".to_owned(), serde_json::json!(sql));
+            snapshot.objects.push(query);
+            let report = AnalysisAnalyzer::new().analyze(
+                &snapshot,
+                &AnalysisOptions {
+                    scope: AnalysisScope::Risk,
+                },
+            );
+            assert_eq!(
+                report
+                    .findings
+                    .iter()
+                    .any(|f| f.rule_id == "risk.update_without_where"),
+                update,
+                "{sql}"
+            );
+            assert_eq!(
+                report
+                    .findings
+                    .iter()
+                    .any(|f| f.rule_id == "risk.delete_without_where"),
+                delete,
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn parsed_projection_lineage_produces_sensitive_read_finding() {
+        let mut snapshot = sample_snapshot();
+        snapshot
+            .objects
+            .retain(|object| object.kind != DbObjectKind::Query);
+        snapshot.edges.clear();
+        let sql = "select email from customers";
+        let parsed = dbgraph_sql::parse_sql(sql, dbgraph_sql::SqlDialect::Postgres).unwrap();
+        let analysis = dbgraph_sql::analyze_sql_with_snapshot(
+            sql,
+            dbgraph_sql::SqlDialect::Postgres,
+            &snapshot,
+        )
+        .unwrap();
+        let mut graph =
+            dbgraph_sql::sql_artifact_to_graph("s1", "sql/email.sql", &parsed, &analysis).unwrap();
+        dbgraph_sql::resolve_sql_edge_targets(&snapshot, &mut graph.edges);
+        snapshot.objects.push(graph.object);
+        snapshot.edges.extend(graph.edges);
+
+        let report = AnalysisAnalyzer::new().analyze(
+            &snapshot,
+            &AnalysisOptions {
+                scope: AnalysisScope::Risk,
+            },
+        );
+
+        assert!(report.findings.iter().any(|finding| finding.rule_id
+            == "risk.query_reads_sensitive_column"
+            && finding.object == "public.customers.email"));
     }
 
     #[test]

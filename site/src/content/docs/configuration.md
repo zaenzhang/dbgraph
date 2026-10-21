@@ -252,7 +252,7 @@ dbgraph analyze --scope quality
 | Field | Meaning |
 | --- | --- |
 | `enabled` | Whether MCP serving is enabled for the project. |
-| `maxResponseChars` | Response size budget used by MCP tools before truncation/follow-up suggestions. |
+| `maxResponseChars` | Maximum total Unicode characters in MCP tool-result text; minimum `64`, default `15000`. |
 
 Example:
 
@@ -264,6 +264,20 @@ Example:
   }
 }
 ```
+
+The budget includes the complete JSON text returned by a tool. It excludes the
+JSON-RPC envelope and escaping added by the transport. Existing result limits
+still control object and relationship counts. When the remaining result is too
+large, the tool returns `isError: true` with JSON error kind
+`response_budget_exceeded`, keeping the response valid JSON. Increase
+`maxResponseChars` or narrow the request instead of retrying the same oversized
+call. Values below `64` are invalid configuration.
+
+Context's `tokenBudget` (CLI `--tokens`) is a separate approximate budget over the
+full pretty-printed context JSON: UTF-8 bytes divided by four, rounded up. It
+includes semantic metadata, paths, suggestions, and formatting; it is not a
+model-specific tokenizer. A budget too small for the response or any relevant
+object produces an explicit error.
 
 ## Agent MCP Config
 

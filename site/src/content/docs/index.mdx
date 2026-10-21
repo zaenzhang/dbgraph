@@ -20,6 +20,16 @@ hero:
   <span>Built with Rust</span>
 </div>
 
+## Reliability update
+
+SQL validation now uses table aliases and query scopes consistently in CLI and
+MCP, with explicit diagnostics for unsupported analysis. Snapshot publication
+waits for index storage, and sync repairs a missing index. Unicode search and
+complete-response budgets make context results more predictable.
+
+See the [usage guide](/dbgraph/usage/) for exit codes, budget limits, and recovery,
+and the [release matrix](/dbgraph/release-matrix/) for all six build targets.
+
 ## What DbGraph gives an agent
 
 <div class="feature-row">

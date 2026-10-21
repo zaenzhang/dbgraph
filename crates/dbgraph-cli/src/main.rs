@@ -215,7 +215,13 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
             } else {
                 print_validate_sql_report(&report);
             }
-            Ok(())
+            if report.valid {
+                Ok(())
+            } else {
+                Err(DbGraphError::invalid_argument(
+                    "SQL validation failed; see report",
+                ))
+            }
         }
         Command::Search {
             path,
@@ -869,7 +875,7 @@ mod tests {
         )
         .expect("validate should not require DB connection");
 
-        assert!(report.valid);
+        assert!(!report.valid);
         assert!(report.unresolved.iter().any(
             |item| item.name == "user" && item.suggestions.contains(&"public.users".to_owned())
         ));
@@ -1000,8 +1006,9 @@ mod tests {
                     .any(|edge| edge.from == "public.payments" && edge.to == "public.orders")
         }));
 
+        assert!(context_project(&temp.root, "refund payment order", 100).is_err());
         let context =
-            context_project(&temp.root, "refund payment order", 120).expect("context should build");
+            context_project(&temp.root, "refund payment order", 800).expect("context should build");
         let names = context
             .objects
             .iter()
@@ -1340,6 +1347,14 @@ mod tests {
         )
         .expect("semantic metadata should write");
 
+        fs::create_dir_all(temp.root.join("sql")).unwrap();
+        for source in ["email.sql", "email_copy.sql"] {
+            fs::write(
+                temp.root.join("sql").join(source),
+                "select email from users",
+            )
+            .unwrap();
+        }
         let summary = run_snapshot(&temp.root).expect("sqlite snapshot should run");
         let stored = SnapshotStore::new(&context)
             .read_snapshot(&summary.snapshot_path)
@@ -1363,6 +1378,54 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("Customer contact email")
         );
+        assert_eq!(summary.sql_artifact_count, 2);
+        assert_eq!(
+            stored
+                .objects
+                .iter()
+                .filter(|o| o.kind == DbObjectKind::Query)
+                .count(),
+            2
+        );
+        {
+            let repo = GraphRepository::open(context.graph_db_path()).unwrap();
+            assert_eq!(repo.sql_artifacts_by_snapshot(&stored.id).unwrap().len(), 2);
+        }
+        assert_snapshot_recovery(&temp.root, &context, &stored);
+    }
+
+    fn assert_snapshot_recovery(root: &Path, context: &ProjectContext, stored: &DbSnapshot) {
+        let unchanged = sync_project(root).unwrap();
+        assert!(unchanged.plan.can_skip_rebuild());
+        assert!(!unchanged.index_rebuilt);
+        fs::remove_file(context.graph_db_path()).unwrap();
+        // An empty index file also needs restoration, not just a missing file.
+        drop(GraphRepository::open(context.graph_db_path()).unwrap());
+        let repaired = sync_project(root).unwrap();
+        assert!(repaired.index_rebuilt);
+        assert!(repaired.snapshot.is_none());
+        assert_eq!(
+            SnapshotStore::new(context).snapshot_paths().unwrap().len(),
+            1
+        );
+        let repo = GraphRepository::open(context.graph_db_path()).unwrap();
+        assert_eq!(repo.sql_artifacts_by_snapshot(&stored.id).unwrap().len(), 2);
+        drop(repo);
+        let db = rusqlite::Connection::open(context.graph_db_path()).unwrap();
+        db.execute_batch("CREATE TRIGGER reject_artifact BEFORE INSERT ON sql_artifacts BEGIN SELECT RAISE(ABORT, 'injected failure'); END;").unwrap();
+        drop(db);
+        fs::write(root.join("sql/email.sql"), "select id from users").unwrap();
+        assert!(run_snapshot(root).is_err());
+        assert_eq!(
+            SnapshotStore::new(context)
+                .read_latest()
+                .unwrap()
+                .unwrap()
+                .id,
+            stored.id
+        );
+        let repo = GraphRepository::open(context.graph_db_path()).unwrap();
+        assert_eq!(repo.sql_artifacts_by_snapshot(&stored.id).unwrap().len(), 2);
     }
 
     #[test]

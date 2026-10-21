@@ -14,7 +14,7 @@ DbGraph 是一个本地优先的数据库上下文工具。典型使用流程是
 
 DbGraph 默认保存的是 schema 元数据、SQL artifact、图关系和 profile 摘要。`validate-sql` 不会执行 SQL，默认也不会保存业务行数据。
 
-完整 `.dbgraph/dbgraph.config.json` 字段说明见 [configuration.md](configuration.md)。
+完整 `.dbgraph/dbgraph.config.json` 字段说明见 [configuration.md](/dbgraph/configuration/)。
 
 ## 安装或直接运行
 
@@ -94,7 +94,7 @@ dbgraph status --json
 
 DbGraph 从 `.dbgraph/dbgraph.config.json` 读取配置。
 
-配置文件有四个顶层部分：
+主要配置部分：
 
 - `database`：provider 和连接来源。
 - `snapshot`：JSON 输出、profile 深度和采样限制。
@@ -160,6 +160,12 @@ Profile 模式：
 - `sample`：允许采样，但只有匹配 `dataAccess` allowlist 的表和列才会读取行值；默认仍会进行敏感信息 mask。
 
 Snapshot 会写入 `.dbgraph/snapshots/`，本地图索引会重建到 `.dbgraph/dbgraph.db`。
+
+只有图索引和 SQL artifact 都成功写入后，新 snapshot 才会发布为 latest。采集失败时，上一份已发布 snapshot 仍是 latest。
+
+使用 `dbgraph sync` 刷新项目：schema 未变化且索引健康时跳过重建；索引缺失时从已发布 snapshot 恢复，不再把缺失索引当成成功跳过。恢复失败会明确报错，不制造一次 schema 变化。
+
+Sync 仍会先连接 provider 采集当前元数据，再判断 schema 是否变化，因此要求配置的数据库可访问；它不是离线索引修复命令。
 
 ### 显式授权的数据 Profiling
 
@@ -250,6 +256,8 @@ dbgraph analyze --scope quality
 
 SQL artifact 会成为图里的 query object。DbGraph 会尽量提取读、写、过滤、JOIN 等依赖关系。
 
+每个来源文件保留独立的 query 身份和路径。多个文件包含相同 SQL 时都能入图；fingerprint 只用于合并等价 workload 信号，不覆盖来源。移动或删除 SQL 文件会在下一次 snapshot diff 中体现为 query object 变化。
+
 ## 常用 CLI 命令
 
 搜索图对象：
@@ -259,6 +267,8 @@ dbgraph search customer
 dbgraph search orders --kind table
 dbgraph search email --kind column --json
 ```
+
+检索会保留 Unicode 词项和短标识符。中文可以匹配对象名或语义描述，但不进行自动翻译；非空查询没有匹配时返回空结果，不会退化为全对象列表。仅使用对象类型等过滤器的明确查询仍可列举对象。
 
 查看表结构：
 
@@ -281,6 +291,8 @@ dbgraph context "refund payment order" --tokens 800
 dbgraph context "which tables are touched by order status changes" --json
 ```
 
+`--tokens` 约束完整、格式化后的 context JSON，包括 semantic、关系、建议和格式开销。`estimatedTokens` 按 UTF-8 字节数除以 4 后向上取整，只是粗估，不是模型 tokenizer 或计费值。超出预算的对象会被整项省略；预算连响应结构或一个相关对象都容纳不了时明确报错，不截断 JSON。需要更多细节时，可提高预算或缩小查询范围。
+
 校验 SQL，但不执行 SQL：
 
 ```powershell
@@ -288,12 +300,20 @@ dbgraph validate-sql --sql "select * from orders"
 dbgraph validate-sql --file sql/orders.sql --dialect postgres --json
 ```
 
+CLI 和 MCP 都要求已有本地 snapshot 与图索引，并使用相同的语法和引用检查。先运行 `dbgraph snapshot`；校验本身不连接数据库。缺少 snapshot 或索引时，CLI 返回退出码 `3`。
+
+`valid: true` 要求没有 unresolved 引用和分析诊断。引用解析保留表别名、限定名和查询作用域，不能用其他表的同名列证明当前引用有效。暂不支持完整分析的 SQL 形态会给出诊断。这些检查不会执行 SQL，也不能证明数据库执行一定成功。
+
+无效 SQL 仍会先输出报告，然后返回退出码 `2`。JSON 使用者应检查 `diagnostics` 和 `unresolved`，修正 SQL 后再尝试。
+
 比较最新 snapshot 和上一个 snapshot：
 
 ```powershell
 dbgraph diff
 dbgraph diff --json
 ```
+
+Diff 至少需要两份已发布 snapshot。零份或只有一份时明确报告缺少基线，不会把当前 snapshot 与自身比较。
 
 修改对象前做影响分析：
 
@@ -349,6 +369,8 @@ dbgraph analyze --include-suppressed --suppressions .dbgraph/suppressions.json
 - SQL Workload & Safety：没有 `WHERE` 的 `UPDATE` 或 `DELETE`。
 - Performance：过滤或 JOIN 使用的列缺少支撑索引。
 
+写操作风险规则读取外层语句的 AST 条件。子查询里的 `WHERE` 或字符串中的 `WHERE` 不会被当作外层 `UPDATE` / `DELETE` 的限制条件。
+
 ## 离线 Agent Benchmark
 
 对比“直接读取原始项目文件”和“使用 DbGraph 结构化上下文”的上下文成本与证据覆盖，不调用真实 LLM：
@@ -358,7 +380,7 @@ dbgraph benchmark-agent --scenario teashop --format markdown --output dbgraph-ag
 dbgraph benchmark-agent --scenario teashop --format json
 ```
 
-报告包含 estimated tokens、retrieval steps、evidence recall、precision 和 token reduction。英文方法说明见 [agent-benchmark.md](agent-benchmark.md)。
+报告包含 estimated tokens、retrieval steps、evidence recall、precision 和 token reduction。英文方法说明见 [agent-benchmark.md](/dbgraph/agent-benchmark/)。
 
 ## MCP Server
 
@@ -382,6 +404,8 @@ dbgraph serve --mcp
 
 MCP 响应是 JSON text content。较大的响应会包含 `responseBudget` 元数据和建议的后续调用。
 
+`mcp.maxResponseChars` 限制工具结果文本的 Unicode 字符总数，最小为 `64`；不包含 JSON-RPC 包装和传输转义开销。剩余结果仍超限时，工具返回 `isError: true`，JSON 中的错误类型为 `response_budget_exceeded`，不会输出破损 JSON。应提高项目配置中的上限或减少请求细节。
+
 ## PostgreSQL Teashop Smoke Test
 
 运行示例数据库：
@@ -399,7 +423,7 @@ Smoke test 会在临时目录初始化 DbGraph 项目，生成 PostgreSQL snapsh
 
 - `dbgraph validate-sql` 不会执行 SQL。
 - `dbgraph analyze` 只基于本地 snapshot 和图索引工作。
-- `dbgraph snapshot` 是会连接配置数据库的命令。
+- `dbgraph snapshot` 和 `dbgraph sync` 会连接配置数据库采集元数据；`doctor --check-db` 会检查连接。
 - 默认关闭 raw sample 存储。
 - 显式开启采样时，敏感样本默认会被 mask。
 - SQLite provider 会拒绝 snapshot `.dbgraph/dbgraph.db`，避免把 DbGraph 内部图数据库误当成业务 SQLite 数据库。

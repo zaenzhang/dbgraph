@@ -165,7 +165,7 @@ impl Default for SecurityConfig {
 pub struct McpConfig {
     /// Whether MCP serving is enabled for this project.
     pub enabled: bool,
-    /// Maximum response size budget in characters.
+    /// Maximum tool-result text size in Unicode characters; at least 64.
     pub max_response_chars: u32,
 }
 
@@ -328,9 +328,9 @@ impl DbGraphConfig {
         }
         .validate()?;
 
-        if self.mcp.max_response_chars == 0 {
+        if self.mcp.max_response_chars < 64 {
             return Err(DbGraphError::invalid_config(
-                "mcp.maxResponseChars must be greater than zero",
+                "mcp.maxResponseChars must be at least 64 to hold a structured error",
             ));
         }
 
@@ -377,6 +377,19 @@ mod tests {
             .expect_err("missing config should fail");
 
         assert!(err.to_string().contains("Run `dbgraph init` first"));
+    }
+
+    #[test]
+    fn mcp_budget_must_fit_a_structured_error() {
+        let mut config = DbGraphConfig::default();
+        config.mcp.max_response_chars = 63;
+        assert!(config
+            .validate()
+            .expect_err("budget is too small")
+            .to_string()
+            .contains("at least 64"));
+        config.mcp.max_response_chars = 64;
+        config.validate().expect("minimum budget should be valid");
     }
 
     #[test]

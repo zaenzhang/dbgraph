@@ -1,6 +1,6 @@
 //! SQL parsing, source scanning, lineage extraction, and graph artifact helpers.
 
-use std::collections::{BTreeSet, HashMap};
+mod lineage;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,8 +11,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlparser::ast::{
-    Delete, Expr, FromTable, GroupByExpr, Ident, JoinConstraint, JoinOperator, ObjectName, Query,
-    Select, SetExpr, Statement, TableFactor, TableWithJoins, UpdateTableFromKind,
+    FromTable, JoinConstraint, JoinOperator, Statement, TableWithJoins, UpdateTableFromKind,
 };
 use sqlparser::dialect::{GenericDialect, MySqlDialect, PostgreSqlDialect};
 use sqlparser::parser::Parser;
@@ -170,7 +169,7 @@ pub struct LineageReference {
     /// Optional table alias used in SQL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
-    /// Whether the reference was resolved to a known table alias.
+    /// Whether the reference resolves in its query scope (and schema, when supplied).
     pub resolved: bool,
 }
 
@@ -184,6 +183,8 @@ pub struct LineageAnalysis {
     pub diagnostics: Vec<ParseDiagnostic>,
     /// Extracted references.
     pub references: Vec<LineageReference>,
+    /// DML statements without a top-level WHERE clause.
+    pub unsafe_writes: Vec<String>,
 }
 
 /// SQL artifact row that can be persisted by storage.
@@ -324,24 +325,43 @@ pub fn scan_sql_files(
 ///
 /// Returns an error if parsing cannot be attempted.
 pub fn analyze_sql(sql: &str, dialect: SqlDialect) -> Result<LineageAnalysis> {
-    let parsed = parse_sql(sql, dialect)?;
-    if parsed.status == ParseStatus::Failed {
-        return Ok(LineageAnalysis {
-            dialect,
-            diagnostics: parsed.diagnostics,
-            references: Vec::new(),
-        });
+    Ok(analyze_sql_scoped(sql, dialect, None))
+}
+
+/// Analyzes SQL references against the current schema, respecting query scopes.
+///
+/// # Errors
+/// Returns parser infrastructure errors; invalid SQL is represented in diagnostics.
+pub fn analyze_sql_with_snapshot(
+    sql: &str,
+    dialect: SqlDialect,
+    snapshot: &dbgraph_core::model::DbSnapshot,
+) -> Result<LineageAnalysis> {
+    Ok(analyze_sql_scoped(sql, dialect, Some(snapshot)))
+}
+
+fn analyze_sql_scoped(
+    sql: &str,
+    dialect: SqlDialect,
+    snapshot: Option<&dbgraph_core::model::DbSnapshot>,
+) -> LineageAnalysis {
+    let mut analyzer = lineage::Analyzer::new(dialect, snapshot);
+    match parse_statements_for_analysis(sql, dialect) {
+        Ok(statements) if statements.is_empty() => {
+            analyzer.result.diagnostics.push(ParseDiagnostic {
+                message: "SQL contains no statements".to_owned(),
+            });
+        }
+        Ok(statements) => {
+            for statement in statements {
+                analyzer.statement(&statement);
+            }
+        }
+        Err(error) => analyzer.result.diagnostics.push(ParseDiagnostic {
+            message: error.to_string(),
+        }),
     }
-    let mut analysis = LineageBuilder::default();
-    let statements = parse_statements_for_analysis(sql, dialect)?;
-    for statement in &statements {
-        analysis.visit_statement(statement);
-    }
-    Ok(LineageAnalysis {
-        dialect,
-        diagnostics: Vec::new(),
-        references: analysis.finish(),
-    })
+    analyzer.result
 }
 
 /// Builds graph/storage records for one SQL artifact.
@@ -355,11 +375,11 @@ pub fn sql_artifact_to_graph(
     parsed: &ParseResult,
     analysis: &LineageAnalysis,
 ) -> Result<SqlArtifactGraph> {
-    let object_id = format!("query:{}", parsed.fingerprint);
+    let object_id = format!("query:{source_path}");
     let mut object = DbObject::new(
         object_id.clone(),
         DbObjectKind::Query,
-        format!("sql.{source_path}:{}", parsed.fingerprint),
+        format!("sql.{source_path}"),
     );
     object.metadata = Metadata::from([
         (
@@ -379,11 +399,7 @@ pub fn sql_artifact_to_graph(
     let mut edges = Vec::new();
     for (idx, reference) in analysis.references.iter().enumerate() {
         edges.push(DbEdge {
-            id: format!(
-                "sql:{}:{}:{idx}",
-                parsed.fingerprint,
-                reference.kind.as_str()
-            ),
+            id: format!("sql:{source_path}:{}:{idx}", reference.kind.as_str()),
             kind: reference.kind,
             from_object_id: object_id.clone(),
             to_object_id: reference.object_name.clone(),
@@ -402,15 +418,16 @@ pub fn sql_artifact_to_graph(
     Ok(SqlArtifactGraph {
         object,
         artifact: SqlArtifactRecord {
-            id: format!("sql:{}", parsed.fingerprint),
+            id: format!("sql:{snapshot_id}:{source_path}"),
             snapshot_id: snapshot_id.to_owned(),
             source_kind: "file".to_owned(),
             source_path: source_path.to_owned(),
             dialect: analysis.dialect.as_str().to_owned(),
             fingerprint: parsed.fingerprint.clone(),
             normalized_sql: parsed.normalized_sql.clone(),
-            ast_json: serde_json::to_string(&parsed.statements).map_err(json_error)?,
-            analysis_json: serde_json::to_string(analysis).map_err(json_error)?,
+            ast_json: serde_json::to_string(&parsed.statements)
+                .map_err(|source| json_error(&source))?,
+            analysis_json: serde_json::to_string(analysis).map_err(|source| json_error(&source))?,
         },
         edges,
     })
@@ -419,77 +436,20 @@ pub fn sql_artifact_to_graph(
 /// Resolves SQL artifact edge targets against known snapshot objects.
 pub fn resolve_sql_edge_targets(snapshot: &dbgraph_core::model::DbSnapshot, edges: &mut [DbEdge]) {
     for edge in edges {
-        if let Some(target) = resolve_reference(snapshot, &edge.to_object_id) {
+        if edge.metadata.get("unresolved") == Some(&serde_json::Value::Bool(true)) {
+            continue;
+        }
+        if let Some(target) = snapshot
+            .objects
+            .iter()
+            .find(|o| o.full_name == edge.to_object_id)
+        {
             edge.to_object_id = target.id.clone();
-            edge.confidence = edge.confidence.max(0.9);
-            edge.metadata
-                .insert("unresolved".to_owned(), serde_json::Value::Bool(false));
             edge.metadata.insert(
                 "resolvedName".to_owned(),
                 serde_json::Value::String(target.full_name.clone()),
             );
         }
-    }
-}
-
-fn resolve_reference<'a>(
-    snapshot: &'a dbgraph_core::model::DbSnapshot,
-    reference: &str,
-) -> Option<&'a DbObject> {
-    let normalized = reference.trim_matches('"').trim_matches('`');
-    snapshot
-        .objects
-        .iter()
-        .find(|object| object.id == normalized || object.full_name == normalized)
-        .or_else(|| resolve_column_reference(snapshot, normalized))
-        .or_else(|| resolve_table_reference(snapshot, normalized))
-}
-
-fn resolve_column_reference<'a>(
-    snapshot: &'a dbgraph_core::model::DbSnapshot,
-    reference: &str,
-) -> Option<&'a DbObject> {
-    let parts = reference.split('.').collect::<Vec<_>>();
-    match parts.as_slice() {
-        [table, column] => snapshot.objects.iter().find(|object| {
-            object.kind == DbObjectKind::Column
-                && object.table_name.as_deref() == Some(*table)
-                && object
-                    .column_name
-                    .as_deref()
-                    .unwrap_or(object.name.as_str())
-                    == *column
-        }),
-        [schema, table, column] => snapshot.objects.iter().find(|object| {
-            object.kind == DbObjectKind::Column
-                && object.schema_name.as_deref() == Some(*schema)
-                && object.table_name.as_deref() == Some(*table)
-                && object
-                    .column_name
-                    .as_deref()
-                    .unwrap_or(object.name.as_str())
-                    == *column
-        }),
-        _ => None,
-    }
-}
-
-fn resolve_table_reference<'a>(
-    snapshot: &'a dbgraph_core::model::DbSnapshot,
-    reference: &str,
-) -> Option<&'a DbObject> {
-    let parts = reference.split('.').collect::<Vec<_>>();
-    match parts.as_slice() {
-        [table] => snapshot.objects.iter().find(|object| {
-            matches!(object.kind, DbObjectKind::Table | DbObjectKind::View)
-                && object.table_name.as_deref().unwrap_or(object.name.as_str()) == *table
-        }),
-        [schema, table] => snapshot.objects.iter().find(|object| {
-            matches!(object.kind, DbObjectKind::Table | DbObjectKind::View)
-                && object.schema_name.as_deref() == Some(*schema)
-                && object.table_name.as_deref().unwrap_or(object.name.as_str()) == *table
-        }),
-        _ => None,
     }
 }
 
@@ -500,255 +460,6 @@ fn parse_statements_for_analysis(sql: &str, dialect: SqlDialect) -> Result<Vec<S
         SqlDialect::Generic => Parser::parse_sql(&GenericDialect {}, sql),
     };
     parsed.map_err(|source| DbGraphError::invalid_argument(source.to_string()))
-}
-
-#[derive(Default)]
-struct LineageBuilder {
-    refs: Vec<LineageReference>,
-    aliases: HashMap<String, String>,
-    ctes: BTreeSet<String>,
-}
-
-impl LineageBuilder {
-    fn visit_statement(&mut self, statement: &Statement) {
-        match statement {
-            Statement::Query(query) => self.visit_query(query),
-            Statement::Insert(insert) => {
-                self.push(DbEdgeKind::WritesTo, &insert.table.to_string(), None, true);
-                if let Some(source) = insert.source.as_deref() {
-                    self.visit_query(source);
-                }
-            }
-            Statement::Update {
-                table,
-                selection,
-                from,
-                ..
-            } => {
-                self.visit_table_with_joins(table, DbEdgeKind::WritesTo);
-                if let Some(selection) = selection {
-                    self.visit_expr(selection, DbEdgeKind::FiltersBy);
-                }
-                if let Some(from) = from {
-                    for table in update_from_tables(from) {
-                        self.visit_table_with_joins(table, DbEdgeKind::ReadsFrom);
-                    }
-                }
-            }
-            Statement::Delete(delete) => self.visit_delete(delete),
-            _ => {}
-        }
-    }
-
-    fn visit_query(&mut self, query: &Query) {
-        if let Some(with) = &query.with {
-            for cte in &with.cte_tables {
-                let alias = cte.alias.name.value.clone();
-                self.ctes.insert(alias.clone());
-                self.push(DbEdgeKind::DependsOn, &alias, None, true);
-                self.visit_query(&cte.query);
-            }
-        }
-        self.visit_set_expr(&query.body);
-        if let Some(order_by) = &query.order_by {
-            if let sqlparser::ast::OrderByKind::Expressions(expressions) = &order_by.kind {
-                for expression in expressions {
-                    self.visit_expr(&expression.expr, DbEdgeKind::OrdersBy);
-                }
-            }
-        }
-    }
-
-    fn visit_set_expr(&mut self, expr: &SetExpr) {
-        match expr {
-            SetExpr::Select(select) => self.visit_select(select),
-            SetExpr::Query(query) => self.visit_query(query),
-            SetExpr::SetOperation { left, right, .. } => {
-                self.visit_set_expr(left);
-                self.visit_set_expr(right);
-            }
-            SetExpr::Insert(statement)
-            | SetExpr::Update(statement)
-            | SetExpr::Delete(statement) => {
-                self.visit_statement(statement);
-            }
-            _ => {}
-        }
-    }
-
-    fn visit_select(&mut self, select: &Select) {
-        for table in &select.from {
-            self.visit_table_with_joins(table, DbEdgeKind::ReadsFrom);
-        }
-        if let Some(selection) = &select.selection {
-            self.visit_expr(selection, DbEdgeKind::FiltersBy);
-        }
-        match &select.group_by {
-            GroupByExpr::Expressions(expressions, _) => {
-                for expression in expressions {
-                    self.visit_expr(expression, DbEdgeKind::GroupsBy);
-                }
-            }
-            GroupByExpr::All(_) => {}
-        }
-        for expression in &select.sort_by {
-            self.visit_expr(&expression.expr, DbEdgeKind::OrdersBy);
-        }
-        if let Some(having) = &select.having {
-            self.visit_expr(having, DbEdgeKind::FiltersBy);
-        }
-    }
-
-    fn visit_delete(&mut self, delete: &Delete) {
-        for table in from_tables(&delete.from) {
-            self.visit_table_with_joins(table, DbEdgeKind::WritesTo);
-        }
-        if let Some(using) = &delete.using {
-            for table in using {
-                self.visit_table_with_joins(table, DbEdgeKind::ReadsFrom);
-            }
-        }
-        if let Some(selection) = &delete.selection {
-            self.visit_expr(selection, DbEdgeKind::FiltersBy);
-        }
-    }
-
-    fn visit_table_with_joins(&mut self, table: &TableWithJoins, base_kind: DbEdgeKind) {
-        self.visit_table_factor(&table.relation, base_kind);
-        for join in &table.joins {
-            self.visit_table_factor(&join.relation, DbEdgeKind::JoinsOn);
-            match join_constraint(&join.join_operator) {
-                Some(JoinConstraint::On(expr)) => self.visit_expr(expr, DbEdgeKind::JoinsOn),
-                Some(JoinConstraint::Using(columns)) => {
-                    for column in columns {
-                        self.push(DbEdgeKind::JoinsOn, &object_name(column), None, false);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn visit_table_factor(&mut self, factor: &TableFactor, kind: DbEdgeKind) {
-        match factor {
-            TableFactor::Table { name, alias, .. } => {
-                let table_name = object_name(name);
-                if let Some(alias) = alias {
-                    self.aliases
-                        .insert(alias.name.value.clone(), table_name.clone());
-                }
-                let is_cte = self.ctes.contains(&table_name);
-                self.push(
-                    kind,
-                    &table_name,
-                    alias.as_ref().map(|alias| alias.name.value.clone()),
-                    !is_cte,
-                );
-            }
-            TableFactor::Derived {
-                subquery, alias, ..
-            } => {
-                if let Some(alias) = alias {
-                    self.push(DbEdgeKind::DependsOn, &alias.name.value, None, true);
-                }
-                self.visit_query(subquery);
-            }
-            TableFactor::NestedJoin {
-                table_with_joins, ..
-            } => {
-                self.visit_table_with_joins(table_with_joins, kind);
-            }
-            _ => self.visit_display_refs(factor, kind),
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &Expr, kind: DbEdgeKind) {
-        match expr {
-            Expr::Identifier(ident) => {
-                self.push(kind, &ident.value, None, false);
-            }
-            Expr::CompoundIdentifier(parts) => self.visit_compound_identifier(parts, kind),
-            Expr::BinaryOp { left, right, .. } => {
-                self.visit_expr(left, kind);
-                self.visit_expr(right, kind);
-            }
-            Expr::Nested(inner) | Expr::UnaryOp { expr: inner, .. } => self.visit_expr(inner, kind),
-            Expr::Between {
-                expr, low, high, ..
-            } => {
-                self.visit_expr(expr, kind);
-                self.visit_expr(low, kind);
-                self.visit_expr(high, kind);
-            }
-            Expr::InList { expr, list, .. } => {
-                self.visit_expr(expr, kind);
-                for item in list {
-                    self.visit_expr(item, kind);
-                }
-            }
-            Expr::IsNull(expr) | Expr::IsNotNull(expr) => self.visit_expr(expr, kind),
-            _ => {}
-        }
-    }
-
-    fn visit_compound_identifier(&mut self, parts: &[Ident], kind: DbEdgeKind) {
-        let values = parts
-            .iter()
-            .map(|part| part.value.clone())
-            .collect::<Vec<_>>();
-        match values.as_slice() {
-            [alias, column] => {
-                if let Some(table) = self.aliases.get(alias).cloned() {
-                    self.push(
-                        kind,
-                        &format!("{table}.{column}"),
-                        Some(alias.clone()),
-                        true,
-                    );
-                } else {
-                    self.push(kind, &values.join("."), Some(alias.clone()), false);
-                }
-            }
-            _ => self.push(kind, &values.join("."), None, false),
-        }
-    }
-
-    fn visit_display_refs(&mut self, value: &impl std::fmt::Display, kind: DbEdgeKind) {
-        let text = value.to_string();
-        for token in identifier_tokens(&text) {
-            self.push(kind, &token, None, false);
-        }
-    }
-
-    fn push(&mut self, kind: DbEdgeKind, object_name: &str, alias: Option<String>, resolved: bool) {
-        let object_name = trim_identifier(object_name);
-        if object_name.is_empty() || is_literal_or_keyword(&object_name) {
-            return;
-        }
-        self.refs.push(LineageReference {
-            kind,
-            object_name,
-            alias,
-            resolved,
-        });
-    }
-
-    fn finish(self) -> Vec<LineageReference> {
-        let mut seen = BTreeSet::new();
-        let mut refs = Vec::new();
-        for reference in self.refs {
-            let key = (
-                reference.kind.as_str().to_owned(),
-                reference.object_name.clone(),
-                reference.alias.clone(),
-                reference.resolved,
-            );
-            if seen.insert(key) {
-                refs.push(reference);
-            }
-        }
-        refs
-    }
 }
 
 fn join_constraint(operator: &JoinOperator) -> Option<&JoinConstraint> {
@@ -783,10 +494,6 @@ fn update_from_tables(from: &UpdateTableFromKind) -> &[TableWithJoins] {
     match from {
         UpdateTableFromKind::BeforeSet(tables) | UpdateTableFromKind::AfterSet(tables) => tables,
     }
-}
-
-fn object_name(name: &ObjectName) -> String {
-    name.to_string()
 }
 
 fn statement_kind(statement: &Statement) -> &'static str {
@@ -853,59 +560,7 @@ fn default_exclude_globs() -> Vec<String> {
     .collect()
 }
 
-fn trim_identifier(value: &str) -> String {
-    value
-        .trim()
-        .trim_matches('"')
-        .trim_matches('`')
-        .trim_matches('\'')
-        .to_owned()
-}
-
-fn identifier_tokens(value: &str) -> Vec<String> {
-    value
-        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'))
-        .map(trim_identifier)
-        .filter(|token| !token.is_empty() && !is_literal_or_keyword(token))
-        .collect()
-}
-
-fn is_literal_or_keyword(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.parse::<f64>().is_ok()
-        || matches!(
-            lower.as_str(),
-            "select"
-                | "from"
-                | "where"
-                | "join"
-                | "inner"
-                | "left"
-                | "right"
-                | "outer"
-                | "full"
-                | "on"
-                | "and"
-                | "or"
-                | "as"
-                | "group"
-                | "by"
-                | "order"
-                | "desc"
-                | "asc"
-                | "update"
-                | "insert"
-                | "delete"
-                | "set"
-                | "into"
-                | "values"
-                | "with"
-                | "paid"
-        )
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn json_error(source: serde_json::Error) -> DbGraphError {
+fn json_error(source: &serde_json::Error) -> DbGraphError {
     DbGraphError::Internal {
         message: format!("JSON serialization error: {source}"),
     }
@@ -1099,7 +754,9 @@ mod tests {
         let parsed = parser
             .parse("select * from orders o where o.status = 'paid'")
             .unwrap();
-        let analysis = analyze_sql(&parsed.raw_sql, SqlDialect::Postgres).unwrap();
+        let analysis =
+            super::analyze_sql_with_snapshot(&parsed.raw_sql, SqlDialect::Postgres, &snapshot)
+                .unwrap();
         let mut graph =
             sql_artifact_to_graph("snapshot:1", "sql/orders.sql", &parsed, &analysis).unwrap();
 

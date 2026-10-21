@@ -9,7 +9,7 @@ use dbgraph_core::{DbGraphError, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 /// Current storage schema version.
-pub const CURRENT_SCHEMA_VERSION: i64 = 1;
+pub const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 /// Local graph database repository.
 pub struct GraphRepository {
@@ -64,6 +64,26 @@ impl GraphRepository {
     ///
     /// Returns an error if any insert fails. The transaction rolls back.
     pub fn rebuild_snapshot(&mut self, snapshot: &DbSnapshot) -> Result<()> {
+        self.rebuild_snapshot_with_artifacts(snapshot, &[])
+    }
+
+    /// Rebuilds a snapshot and its SQL artifacts atomically.
+    ///
+    /// # Errors
+    /// Rolls back all rows if an insert fails or an artifact belongs to another snapshot.
+    pub fn rebuild_snapshot_with_artifacts(
+        &mut self,
+        snapshot: &DbSnapshot,
+        artifacts: &[SqlArtifactRecord],
+    ) -> Result<()> {
+        if artifacts
+            .iter()
+            .any(|artifact| artifact.snapshot_id != snapshot.id)
+        {
+            return Err(DbGraphError::invalid_argument(
+                "SQL artifact snapshot does not match index snapshot",
+            ));
+        }
         let tx = self.conn.transaction().map_err(sql_error)?;
         delete_snapshot_index(&tx, &snapshot.id)?;
         insert_snapshot_tx(&tx, snapshot)?;
@@ -71,6 +91,7 @@ impl GraphRepository {
         insert_edges_tx(&tx, &snapshot.id, &snapshot.edges)?;
         insert_table_profiles_tx(&tx, &snapshot.id, &snapshot.table_profiles)?;
         insert_column_profiles_tx(&tx, &snapshot.id, &snapshot.column_profiles)?;
+        insert_sql_artifacts_tx(&tx, artifacts)?;
         tx.commit().map_err(sql_error)
     }
 
@@ -83,37 +104,14 @@ impl GraphRepository {
         insert_snapshot_conn(&self.conn, snapshot)
     }
 
-    /// Inserts SQL artifacts, replacing prior rows with the same snapshot fingerprint.
+    /// Inserts SQL artifacts, replacing prior rows for the same snapshot and source path.
     ///
     /// # Errors
     ///
     /// Returns an error if any artifact row cannot be written.
     pub fn insert_sql_artifacts(&mut self, artifacts: &[SqlArtifactRecord]) -> Result<()> {
         let tx = self.conn.transaction().map_err(sql_error)?;
-        let mut stmt = tx
-            .prepare(
-                "INSERT OR REPLACE INTO sql_artifacts(
-                    id, snapshot_id, source_kind, source_path, dialect, fingerprint,
-                    normalized_sql, ast_json, analysis_json
-                 )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            )
-            .map_err(sql_error)?;
-        for artifact in artifacts {
-            stmt.execute(params![
-                artifact.id,
-                artifact.snapshot_id,
-                artifact.source_kind,
-                artifact.source_path,
-                artifact.dialect,
-                artifact.fingerprint,
-                artifact.normalized_sql,
-                artifact.ast_json,
-                artifact.analysis_json
-            ])
-            .map_err(sql_error)?;
-        }
-        drop(stmt);
+        insert_sql_artifacts_tx(&tx, artifacts)?;
         tx.commit().map_err(sql_error)
     }
 
@@ -206,6 +204,20 @@ impl GraphRepository {
             .query_map(params![snapshot_id], row_to_edge)
             .map_err(sql_error)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(sql_error)
+    }
+
+    /// Reports whether a snapshot has a committed graph index, including empty snapshots.
+    ///
+    /// # Errors
+    /// Returns storage query errors.
+    pub fn has_snapshot(&self, snapshot_id: &str) -> Result<bool> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = ?1)",
+                params![snapshot_id],
+                |row| row.get(0),
+            )
             .map_err(sql_error)
     }
 
@@ -431,11 +443,21 @@ pub fn run_migrations(conn: &Connection) -> Result<bool> {
         CREATE INDEX IF NOT EXISTS idx_edges_snapshot_kind_to ON edges(snapshot_id, kind, to_object_id);
         CREATE INDEX IF NOT EXISTS idx_table_profiles_snapshot ON table_profiles(snapshot_id);
         CREATE INDEX IF NOT EXISTS idx_column_profiles_snapshot ON column_profiles(snapshot_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_sql_artifacts_snapshot_fingerprint ON sql_artifacts(snapshot_id, fingerprint);
         CREATE INDEX IF NOT EXISTS idx_sql_artifacts_snapshot_source ON sql_artifacts(snapshot_id, source_path);
         ",
     )
     .map_err(sql_error)?;
+
+    if schema_version(conn)? < 2 {
+        conn.execute_batch(
+            "BEGIN;
+             DROP INDEX IF EXISTS idx_sql_artifacts_snapshot_fingerprint;
+             DROP INDEX IF EXISTS idx_sql_artifacts_snapshot_source;
+             CREATE UNIQUE INDEX idx_sql_artifacts_snapshot_source ON sql_artifacts(snapshot_id, source_path);
+             INSERT INTO schema_versions VALUES (2, 0, 'SQL artifact identity follows snapshot and source');
+             COMMIT;"
+        ).map_err(sql_error)?;
+    }
 
     let fts_enabled = match conn.execute_batch(
         "
@@ -466,6 +488,33 @@ pub fn run_migrations(conn: &Connection) -> Result<bool> {
     .map_err(sql_error)?;
 
     Ok(fts_enabled)
+}
+
+fn insert_sql_artifacts_tx(tx: &Transaction<'_>, artifacts: &[SqlArtifactRecord]) -> Result<()> {
+    let mut stmt = tx
+        .prepare(
+            "INSERT OR REPLACE INTO sql_artifacts(
+                    id, snapshot_id, source_kind, source_path, dialect, fingerprint,
+                    normalized_sql, ast_json, analysis_json
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .map_err(sql_error)?;
+    for artifact in artifacts {
+        stmt.execute(params![
+            artifact.id,
+            artifact.snapshot_id,
+            artifact.source_kind,
+            artifact.source_path,
+            artifact.dialect,
+            artifact.fingerprint,
+            artifact.normalized_sql,
+            artifact.ast_json,
+            artifact.analysis_json
+        ])
+        .map_err(sql_error)?;
+    }
+    Ok(())
 }
 
 fn schema_version(conn: &Connection) -> Result<i64> {
@@ -823,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn sql_artifacts_are_deduped_by_snapshot_and_fingerprint() {
+    fn sql_artifacts_replace_same_source_and_keep_duplicate_content_sources() {
         let mut repo = GraphRepository::open_in_memory().expect("repo should open");
         let snapshot = sample_snapshot(1);
         repo.rebuild_snapshot(&snapshot)
@@ -855,6 +904,67 @@ mod tests {
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].id, "sql:two");
         assert_eq!(stored[0].normalized_sql, "SELECT * FROM public.users");
+        let mut another = stored[0].clone();
+        another.id = "sql:another-source".to_owned();
+        another.source_path = "sql/also_users.sql".to_owned();
+        repo.insert_sql_artifacts(&[another]).unwrap();
+        assert_eq!(
+            repo.sql_artifacts_by_snapshot(&snapshot.id).unwrap().len(),
+            2
+        );
+        let mut next = snapshot.clone();
+        next.id = "s2".into();
+        let mut next_artifact = stored[0].clone();
+        next_artifact.snapshot_id.clone_from(&next.id);
+        next_artifact.id = "sql:s2:users.sql".into();
+        repo.rebuild_snapshot_with_artifacts(&next, &[next_artifact])
+            .unwrap();
+        assert_eq!(
+            repo.sql_artifacts_by_snapshot(&snapshot.id).unwrap().len(),
+            2
+        );
+        assert_eq!(repo.sql_artifacts_by_snapshot(&next.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn version_one_database_drops_fingerprint_uniqueness() {
+        let repo = GraphRepository::open_in_memory().unwrap();
+        repo.conn.execute_batch("DROP INDEX idx_sql_artifacts_snapshot_source; CREATE UNIQUE INDEX idx_sql_artifacts_snapshot_fingerprint ON sql_artifacts(snapshot_id, fingerprint); DELETE FROM schema_versions; INSERT INTO schema_versions VALUES(1, 0, 'old schema');").unwrap();
+        super::run_migrations(&repo.conn).unwrap();
+        assert_eq!(
+            repo.schema_version().unwrap(),
+            super::CURRENT_SCHEMA_VERSION
+        );
+        let old_index: bool = repo.conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'idx_sql_artifacts_snapshot_fingerprint')", [], |row| row.get(0)).unwrap();
+        assert!(!old_index);
+    }
+
+    #[test]
+    fn artifact_failure_rolls_back_graph_and_artifacts_together() {
+        let mut repo = GraphRepository::open_in_memory().unwrap();
+        let snapshot = sample_snapshot(2);
+        repo.rebuild_snapshot(&snapshot).unwrap();
+        repo.conn.execute_batch("CREATE TRIGGER reject_artifact BEFORE INSERT ON sql_artifacts BEGIN SELECT RAISE(ABORT, 'injected failure'); END;").unwrap();
+        let artifact = SqlArtifactRecord {
+            id: "a".into(),
+            snapshot_id: snapshot.id.clone(),
+            source_kind: "file".into(),
+            source_path: "a.sql".into(),
+            dialect: "postgres".into(),
+            fingerprint: "query".into(),
+            normalized_sql: "select 1".into(),
+            ast_json: "[]".into(),
+            analysis_json: "{}".into(),
+        };
+        let changed = sample_snapshot(3);
+        assert!(repo
+            .rebuild_snapshot_with_artifacts(&changed, &[artifact])
+            .is_err());
+        assert_eq!(repo.object_count(&snapshot.id).unwrap(), 2);
+        assert!(repo
+            .sql_artifacts_by_snapshot(&snapshot.id)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

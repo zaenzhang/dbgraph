@@ -4,6 +4,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
+use dbgraph_core::config::{DbGraphConfig, McpConfig};
 use dbgraph_core::diff::{DiffEngine, SchemaDiff};
 use dbgraph_core::model::{ColumnProfile, DbEdge, DbObject, DbObjectKind, DbSnapshot};
 use dbgraph_core::project::ProjectContext;
@@ -14,7 +15,7 @@ use dbgraph_graph::context::{ContextBuilder, ContextOptions, RankingWeights};
 use dbgraph_graph::impact::{ImpactAnalyzer, ImpactOptions, ImpactReport};
 use dbgraph_graph::relations::{relations_for, Direction, RelationsOptions};
 use dbgraph_graph::search::{search_snapshot, SearchOptions, SearchResult};
-use dbgraph_sql::{analyze_sql, SqlDialect};
+use dbgraph_sql::{analyze_sql_with_snapshot, SqlDialect};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -92,18 +93,36 @@ impl ToolRegistry {
     }
 
     fn execute_call(params: &Value) -> Value {
-        let Some(name) = params.get("name").and_then(Value::as_str) else {
-            return ToolCallResult::error(
+        let empty = json!({});
+        let arguments = params.get("arguments").unwrap_or(&empty);
+        let max_chars = match response_char_budget(arguments) {
+            Ok(max_chars) => max_chars,
+            Err(error) => {
+                return tool_result(Err(error))
+                    .within_char_budget(McpConfig::default().max_response_chars as usize)
+                    .into_json();
+            }
+        };
+        let result = if let Some(name) = params.get("name").and_then(Value::as_str) {
+            Self::execute(name, arguments)
+        } else {
+            ToolCallResult::error(
                 "invalid_params",
                 "tools/call requires params.name",
                 Some("Pass {\"name\":\"dbgraph_status\",\"arguments\":{...}}."),
             )
-            .into_json();
         };
-        let empty = json!({});
-        let arguments = params.get("arguments").unwrap_or(&empty);
-        Self::execute(name, arguments).into_json()
+        result.within_char_budget(max_chars).into_json()
     }
+}
+
+fn response_char_budget(arguments: &Value) -> Result<usize> {
+    let context = discover_context(&project_path(arguments))?;
+    if !context.config_path().exists() {
+        // Status and initialization errors are available before a project has config.
+        return Ok(McpConfig::default().max_response_chars as usize);
+    }
+    Ok(DbGraphConfig::load(&context)?.mcp.max_response_chars as usize)
 }
 
 fn status_tool() -> ToolDefinition {
@@ -397,6 +416,24 @@ impl ToolCallResult {
 
     fn into_json(self) -> Value {
         serde_json::to_value(self).expect("tool call result should serialize")
+    }
+
+    fn within_char_budget(self, max_chars: usize) -> Self {
+        let chars = self
+            .content
+            .iter()
+            .map(|item| item.text.chars().count())
+            .sum::<usize>();
+        if chars <= max_chars {
+            return self;
+        }
+        Self {
+            content: vec![TextContent {
+                content_type: "text",
+                text: json!({"error": {"kind": "response_budget_exceeded"}}).to_string(),
+            }],
+            is_error: true,
+        }
     }
 }
 
@@ -714,7 +751,18 @@ fn table_project(arguments: &Value) -> Result<Value> {
 fn context_project(arguments: &Value) -> Result<Value> {
     let root = project_path(arguments);
     let query = required_string(arguments, "query")?;
-    let token_budget = bounded_usize(arguments, "tokenBudget", 800, 100, 8000);
+    let token_budget = match arguments.get("tokenBudget") {
+        None => 800,
+        Some(value) => value
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|value| (100..=8000).contains(value))
+            .ok_or_else(|| {
+                DbGraphError::invalid_argument(
+                    "tokenBudget must be an integer between 100 and 8000",
+                )
+            })?,
+    };
     let max_objects = if mode(arguments) == ResponseMode::Verbose {
         24
     } else {
@@ -730,7 +778,7 @@ fn context_project(arguments: &Value) -> Result<Value> {
             token_budget,
             max_objects,
         },
-    );
+    )?;
     to_value(package)
 }
 
@@ -906,7 +954,7 @@ fn validate_sql_project(arguments: &Value) -> Result<Value> {
     let context = discover_context(&root)?;
     require_graph_index(&context)?;
     let snapshot = latest_snapshot(&context)?;
-    let analysis = analyze_sql(sql, dialect)?;
+    let analysis = analyze_sql_with_snapshot(sql, dialect, &snapshot)?;
     let valid_parse = analysis.diagnostics.is_empty();
     let references = analysis
         .references
@@ -916,16 +964,17 @@ fn validate_sql_project(arguments: &Value) -> Result<Value> {
     let mut unresolved = analysis
         .references
         .iter()
-        .filter(|reference| !reference_exists(&snapshot, &reference.object_name))
+        .filter(|reference| !reference.resolved)
         .map(|reference| UnresolvedReference {
             name: reference.object_name.clone(),
             kind: reference.kind.as_str().to_owned(),
             suggestions: suggest_objects(&snapshot, &reference.object_name),
         })
         .collect::<Vec<_>>();
+    let valid = valid_parse && unresolved.is_empty();
     let response_budget = budget.apply_unresolved(&mut unresolved);
     to_value(ValidateSqlReport {
-        valid: valid_parse && unresolved.is_empty(),
+        valid,
         executed: false,
         dialect: dialect.as_str().to_owned(),
         diagnostics: analysis
@@ -1051,18 +1100,6 @@ fn table_suggestions(snapshot: &DbSnapshot, table_name: &str) -> Vec<String> {
     suggestions.sort();
     suggestions.truncate(5);
     suggestions
-}
-
-fn reference_exists(snapshot: &DbSnapshot, reference: &str) -> bool {
-    let normalized = normalize_name(reference);
-    snapshot.objects.iter().any(|object| {
-        object.full_name.eq_ignore_ascii_case(reference)
-            || object.name.eq_ignore_ascii_case(reference)
-            || object
-                .full_name
-                .to_ascii_lowercase()
-                .ends_with(&format!(".{normalized}"))
-    })
 }
 
 fn suggest_objects(snapshot: &DbSnapshot, reference: &str) -> Vec<String> {
@@ -1487,7 +1524,7 @@ mod tests {
                     "arguments": {
                         "projectPath": temp.root,
                         "query": "refund payment order",
-                        "tokenBudget": 120,
+                        "tokenBudget": 500,
                         "mode": "compact"
                     }
                 }
@@ -1525,7 +1562,7 @@ mod tests {
             .any(|tool| tool
                 .as_str()
                 .is_some_and(|tool| tool.contains("dbgraph table"))));
-        assert!(context["estimatedTokens"].as_u64().expect("tokens") <= 120);
+        assert!(context["estimatedTokens"].as_u64().expect("tokens") <= 500);
         assert_eq!(relations["target"], "public.orders");
         assert!(relations["paths"]
             .as_array()
@@ -1710,6 +1747,85 @@ mod tests {
                 .is_some_and(|tool| tool.contains("dbgraph_table"))));
     }
 
+    #[test]
+    fn configured_character_budget_bounds_every_tool_result_and_error() {
+        let temp = TempProject::new();
+        write_indexed_snapshot(&temp.root, &sample_snapshot());
+        let context = ProjectContext::from_project_root(&temp.root);
+        let mut config = DbGraphConfig::default();
+        config.mcp.max_response_chars = 64;
+        config.save(&context).expect("budget config should save");
+
+        for tool in ToolRegistry.tools() {
+            let result = ToolRegistry::execute_call(&json!({
+                "name": tool.name,
+                "arguments": {
+                    "projectPath": temp.root,
+                    "query": "payment",
+                    "table": "payments",
+                    "object": "payments",
+                    "sql": "select * from public.payments"
+                }
+            }));
+            let text = result["content"][0]["text"].as_str().expect("tool text");
+            assert!(text.chars().count() <= 64, "{} exceeds budget", tool.name);
+            let payload: Value = serde_json::from_str(text).expect("complete JSON");
+            assert_eq!(result["isError"], true);
+            assert_eq!(payload["error"]["kind"], "response_budget_exceeded");
+        }
+
+        let result = ToolRegistry::execute_call(&json!({"arguments": {"projectPath": temp.root}}));
+        let text = result["content"][0]["text"]
+            .as_str()
+            .expect("invalid params text");
+        assert!(text.chars().count() <= 64);
+        assert!(serde_json::from_str::<Value>(text).is_ok());
+        assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn character_budget_counts_unicode_characters_and_keeps_valid_json() {
+        let result =
+            ToolCallResult::success(&json!({"text": "退款".repeat(20)})).within_char_budget(64);
+        assert!(!result.is_error);
+        assert!(result.content[0].text.len() > 64);
+        assert!(result.content[0].text.chars().count() <= 64);
+        assert!(serde_json::from_str::<Value>(&result.content[0].text).is_ok());
+    }
+
+    #[test]
+    fn context_rejects_tiny_token_budgets_and_invalid_character_config() {
+        let temp = TempProject::new();
+        write_indexed_snapshot(&temp.root, &sample_snapshot());
+        for token_budget in [1, 100] {
+            let result = ToolRegistry::execute_call(&json!({
+                "name": "dbgraph_context",
+                "arguments": {"projectPath": temp.root, "query": "payment", "tokenBudget": token_budget}
+            }));
+            assert_eq!(result["isError"], true);
+            let payload: Value =
+                serde_json::from_str(result["content"][0]["text"].as_str().expect("error JSON"))
+                    .expect("valid JSON");
+            assert_eq!(payload["error"]["kind"], "invalid_argument");
+        }
+
+        let mut config = DbGraphConfig::default();
+        config.mcp.max_response_chars = 1;
+        fs::write(
+            ProjectContext::from_project_root(&temp.root).config_path(),
+            serde_json::to_string(&config).expect("config JSON"),
+        )
+        .expect("write invalid config");
+        let result = ToolRegistry::execute_call(
+            &json!({"name": "dbgraph_status", "arguments": {"projectPath": temp.root}}),
+        );
+        let payload: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().expect("error JSON"))
+                .expect("valid JSON");
+        assert_eq!(result["isError"], true);
+        assert_eq!(payload["error"]["kind"], "invalid_config");
+    }
+
     fn run_one_response(input: &str) -> serde_json::Value {
         let responses = run_responses(input);
         assert_eq!(responses.len(), 1);
@@ -1739,7 +1855,9 @@ mod tests {
         let context = dbgraph_core::project::ProjectContext::from_project_root(root);
         std::fs::create_dir_all(context.dbgraph_dir()).expect("dbgraph dir should exist");
         std::fs::create_dir_all(context.snapshots_dir()).expect("snapshots dir should exist");
-        std::fs::write(context.config_path(), "{}\n").expect("config marker should write");
+        DbGraphConfig::default()
+            .save(&context)
+            .expect("config should save");
         dbgraph_core::snapshot::SnapshotStore::new(&context)
             .write_snapshot(snapshot, true)
             .expect("snapshot should write");
@@ -1753,7 +1871,9 @@ mod tests {
         let context = dbgraph_core::project::ProjectContext::from_project_root(root);
         std::fs::create_dir_all(context.dbgraph_dir()).expect("dbgraph dir should exist");
         std::fs::create_dir_all(context.snapshots_dir()).expect("snapshots dir should exist");
-        std::fs::write(context.config_path(), "{}\n").expect("config marker should write");
+        DbGraphConfig::default()
+            .save(&context)
+            .expect("config should save");
         dbgraph_core::snapshot::SnapshotStore::new(&context)
             .write_snapshot(snapshot, true)
             .expect("snapshot should write");

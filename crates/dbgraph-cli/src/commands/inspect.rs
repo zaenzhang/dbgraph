@@ -14,7 +14,7 @@ use dbgraph_graph::context::{ContextBuilder, ContextOptions, ContextPackage, Ran
 use dbgraph_graph::impact::{ImpactAnalyzer, ImpactOptions, ImpactReport};
 use dbgraph_graph::relations::{relations_for, Direction, RelationsOptions, RelationsReport};
 use dbgraph_graph::search::{search_snapshot, SearchOptions, SearchResult};
-use dbgraph_sql::{analyze_sql, SqlDialect, SqlParser};
+use dbgraph_sql::{analyze_sql_with_snapshot, SqlDialect, SqlParser};
 use dbgraph_storage::GraphRepository;
 use serde::Serialize;
 
@@ -59,15 +59,16 @@ pub(crate) fn validate_sql(
     dialect: SqlDialect,
 ) -> Result<ValidateSqlReport> {
     let parsed = SqlParser::new(dialect).parse(sql)?;
-    let analysis = analyze_sql(sql, dialect)?;
     let context = ProjectContext::discover_from(start.as_ref())?
         .unwrap_or_else(|| ProjectContext::from_project_root(start.as_ref()));
-    let latest = SnapshotStore::new(&context).read_latest()?;
+    require_graph_index(&context)?;
+    let snapshot = latest_snapshot(&context)?;
+    let analysis = analyze_sql_with_snapshot(sql, dialect, &snapshot)?;
     let mut unresolved = Vec::new();
-    if let Some(snapshot) = latest {
+    {
         let repository = GraphRepository::open(context.graph_db_path())?;
-        for reference in analysis.references {
-            if !reference_exists(&snapshot, &reference.object_name) {
+        for reference in &analysis.references {
+            if !reference.resolved {
                 unresolved.push(UnresolvedSqlReference {
                     kind: reference.kind.as_str().to_owned(),
                     name: reference.object_name.clone(),
@@ -78,30 +79,15 @@ pub(crate) fn validate_sql(
     }
 
     Ok(ValidateSqlReport {
-        valid: parsed.status == dbgraph_sql::ParseStatus::Parsed,
+        valid: analysis.diagnostics.is_empty() && unresolved.is_empty(),
         dialect: dialect.as_str().to_owned(),
         normalized_sql: parsed.normalized_sql,
-        diagnostics: parsed
+        diagnostics: analysis
             .diagnostics
             .into_iter()
-            .chain(analysis.diagnostics)
             .map(|diagnostic| diagnostic.message)
             .collect(),
         unresolved,
-    })
-}
-
-fn reference_exists(snapshot: &dbgraph_core::model::DbSnapshot, name: &str) -> bool {
-    let normalized = normalize_sql_name(name);
-    snapshot.objects.iter().any(|object| {
-        matches!(
-            object.kind,
-            dbgraph_core::model::DbObjectKind::Table
-                | dbgraph_core::model::DbObjectKind::View
-                | dbgraph_core::model::DbObjectKind::MaterializedView
-                | dbgraph_core::model::DbObjectKind::Column
-        ) && (normalize_sql_name(&object.full_name) == normalized
-            || normalize_sql_name(&object.name) == normalized)
     })
 }
 
@@ -148,7 +134,7 @@ fn suggest_objects(
         .map(|object| object.full_name.clone())
         .collect::<Vec<_>>();
     for object in repository.search_objects(&normalized)? {
-        if !suggestions.contains(&object.full_name) {
+        if object.snapshot_id == snapshot.id && !suggestions.contains(&object.full_name) {
             suggestions.push(object.full_name);
         }
     }
@@ -200,7 +186,10 @@ fn normalize_sql_name(value: &str) -> String {
 pub(crate) fn print_validate_sql_report(report: &ValidateSqlReport) {
     println!("SQL validation");
     println!("Dialect: {}", report.dialect);
-    println!("Parse: {}", if report.valid { "valid" } else { "invalid" });
+    println!(
+        "Validation: {}",
+        if report.valid { "valid" } else { "invalid" }
+    );
     if !report.diagnostics.is_empty() {
         println!("Diagnostics:");
         for diagnostic in &report.diagnostics {
@@ -444,14 +433,14 @@ pub(crate) fn context_project(
     let context = discover_context(start.as_ref())?;
     require_graph_index(&context)?;
     let snapshot = latest_snapshot(&context)?;
-    Ok(ContextBuilder::new(RankingWeights::default()).build(
+    ContextBuilder::new(RankingWeights::default()).build(
         &snapshot,
         query,
         &ContextOptions {
             token_budget,
             max_objects: 12,
         },
-    ))
+    )
 }
 
 pub(crate) fn print_context_report(report: &ContextPackage) {

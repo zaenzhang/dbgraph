@@ -64,7 +64,7 @@ pub fn parse_search_query(raw: &str) -> ParsedSearchQuery {
         }
         match key.to_ascii_lowercase().as_str() {
             "kind" => parsed.kinds.push(value.to_ascii_lowercase()),
-            "schema" => parsed.schema_filters.push(value.to_ascii_lowercase()),
+            "schema" => parsed.schema_filters.push(value.to_lowercase()),
             "name" => parsed.name_filters.push(value),
             _ => text.push(token),
         }
@@ -82,6 +82,16 @@ pub fn search_snapshot(
 ) -> Vec<SearchResult> {
     let parsed = parse_search_query(query);
     let terms = extract_search_terms(&parsed.text);
+    // A filter-only query deliberately browses that subset. Free text that has
+    // no searchable terms must not silently turn into a whole-snapshot query.
+    if terms.is_empty()
+        && (!parsed.text.trim().is_empty()
+            || (parsed.kinds.is_empty()
+                && parsed.schema_filters.is_empty()
+                && parsed.name_filters.is_empty()))
+    {
+        return Vec::new();
+    }
     let mut results = snapshot
         .objects
         .iter()
@@ -114,21 +124,10 @@ pub fn search_snapshot(
 /// Extracts useful terms from natural-language text.
 #[must_use]
 pub fn extract_search_terms(query: &str) -> Vec<String> {
-    let expanded = query
-        .replace(['_', '.'], " ")
-        .chars()
-        .flat_map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                vec![ch]
-            } else {
-                vec![' ']
-            }
-        })
-        .collect::<String>();
     let mut terms = Vec::new();
-    for word in expanded.split_whitespace() {
-        let lower = word.to_ascii_lowercase();
-        if lower.len() < 3 || is_stop_word(&lower) {
+    for word in query.split(|ch: char| !ch.is_alphanumeric()) {
+        let lower = word.to_lowercase();
+        if lower.is_empty() || is_stop_word(&lower) {
             continue;
         }
         terms.push(lower.clone());
@@ -183,14 +182,14 @@ fn matches_filters(object: &DbObject, parsed: &ParsedSearchQuery) -> bool {
             .any(|kind| object.kind.as_str() == kind.as_str()))
         && (parsed.schema_filters.is_empty()
             || object.schema_name.as_ref().is_some_and(|schema| {
-                let schema = schema.to_ascii_lowercase();
+                let schema = schema.to_lowercase();
                 parsed.schema_filters.contains(&schema)
             }))
         && (parsed.name_filters.is_empty()
             || parsed.name_filters.iter().any(|filter| {
-                let filter = filter.to_ascii_lowercase();
-                object.name.to_ascii_lowercase().contains(&filter)
-                    || object.full_name.to_ascii_lowercase().contains(&filter)
+                let filter = filter.to_lowercase();
+                object.name.to_lowercase().contains(&filter)
+                    || object.full_name.to_lowercase().contains(&filter)
             }))
 }
 
@@ -202,14 +201,16 @@ fn score_object(
 ) -> f64 {
     let mut score = 0.0;
     let mut matched = terms.is_empty();
+    let name = object.name.to_lowercase();
+    let full_name = object.full_name.to_lowercase();
     for term in terms {
-        if object.full_name.eq_ignore_ascii_case(term) || object.name.eq_ignore_ascii_case(term) {
+        if full_name == *term || name == *term {
             score += 50.0;
             matched = true;
-        } else if object.name.to_ascii_lowercase().starts_with(term) {
+        } else if name.starts_with(term) {
             score += 25.0;
             matched = true;
-        } else if object.name.to_ascii_lowercase().contains(term) {
+        } else if name.contains(term) {
             score += 15.0;
             matched = true;
         }
@@ -245,7 +246,7 @@ fn object_haystack(object: &DbObject) -> String {
         object.full_name,
         serde_json::to_string(&object.metadata).unwrap_or_default()
     )
-    .to_ascii_lowercase()
+    .to_lowercase()
 }
 
 fn object_summary(object: &DbObject) -> String {
@@ -312,6 +313,42 @@ mod tests {
         assert_eq!(results[0].kind, "table");
         assert_eq!(results[0].full_name, "public.payments");
         assert!(results[0].summary.contains("payment"));
+    }
+
+    #[test]
+    fn search_preserves_unicode_terms_and_short_identifiers() {
+        let mut snapshot = sample_snapshot();
+        snapshot.objects[0].metadata.insert(
+            "semantic".to_owned(),
+            serde_json::json!({"description": "退款记录"}),
+        );
+        snapshot.objects.push(DbObject::new(
+            "column:orders.id",
+            DbObjectKind::Column,
+            "public.orders.id",
+        ));
+
+        let chinese = search_snapshot(&snapshot, "kind:table 退款", &SearchOptions::default());
+        assert_eq!(chinese.len(), 1);
+        assert_eq!(chinese[0].full_name, "public.orders");
+        let short = search_snapshot(&snapshot, "id", &SearchOptions::default());
+        assert_eq!(short.len(), 1);
+        assert_eq!(short[0].full_name, "public.orders.id");
+    }
+
+    #[test]
+    fn search_returns_no_matches_without_terms_but_allows_filter_only_queries() {
+        let snapshot = sample_snapshot();
+        for query in ["不存在", "unmatched", "!!!", "the and", ""] {
+            assert!(search_snapshot(&snapshot, query, &SearchOptions::default()).is_empty());
+        }
+        let filtered = search_snapshot(
+            &snapshot,
+            "kind:table schema:public name:order",
+            &SearchOptions::default(),
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].full_name, "public.orders");
     }
 
     fn sample_snapshot() -> DbSnapshot {

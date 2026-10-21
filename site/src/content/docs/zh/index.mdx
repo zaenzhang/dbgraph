@@ -20,6 +20,12 @@ hero:
   <span>Rust 实现</span>
 </div>
 
+## 可靠性更新
+
+CLI 与 MCP 现在按表别名和查询作用域进行一致的 SQL 引用校验，暂不支持完整分析的形态会明确报告。Snapshot 等待索引写入成功后再发布，sync 可恢复缺失索引；Unicode 检索和完整响应预算减少无效结果与超长上下文。
+
+退出码、预算限制和恢复方法见[中文指南](/dbgraph/zh/usage/)，六个平台的构建范围见[发布矩阵](/dbgraph/release-matrix/)。
+
 ## DbGraph 给 Agent 什么能力
 
 <div class="feature-row">

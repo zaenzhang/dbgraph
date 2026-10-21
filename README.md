@@ -141,6 +141,8 @@ For a complete walkthrough, see [docs/usage.md](docs/usage.md) or [docs/usage.zh
 - `dbgraph snapshot [PATH] [--json]` captures schema metadata through the configured provider.
 - Snapshot JSON is written under `.dbgraph/snapshots/`.
 - The local graph index is rebuilt into `.dbgraph/dbgraph.db`.
+- A snapshot is published only after index and SQL artifact storage succeeds; failures preserve the previous latest snapshot.
+- `dbgraph sync` restores a missing graph index even when the schema is unchanged.
 - Sensitive connection strings are not printed in provider errors.
 - Business-row sampling is disabled unless sample profile mode and a matching `dataAccess` rule explicitly allow specific columns.
 
@@ -151,6 +153,13 @@ For a complete walkthrough, see [docs/usage.md](docs/usage.md) or [docs/usage.zh
 - Preserves raw SQL, normalized SQL, fingerprints, statement summaries, and diagnostics.
 - Extracts reads, writes, joins, filters, groups, ordering, and CTE dependencies where supported.
 - Stores SQL artifacts as query objects in the graph.
+- Keeps each source file distinct even when several files contain identical SQL; fingerprints group workload signals.
+
+SQL validation shares alias- and scope-aware reference checks between CLI and
+MCP. It requires a local snapshot and graph index, and never executes SQL.
+Unresolved references and unsupported analysis produce `valid: false`; the CLI
+prints the report and exits with code `2`. See the [usage guide](docs/usage.md)
+for validation limits and missing-index recovery.
 
 ### Search, Context, and Impact
 
@@ -162,6 +171,11 @@ For a complete walkthrough, see [docs/usage.md](docs/usage.md) or [docs/usage.zh
 | `dbgraph context` | Build compact, read-only context for AI database work. |
 | `dbgraph diff` | Compare the latest snapshot with the previous snapshot. |
 | `dbgraph impact` | Report direct and indirect affected objects plus risk notes. |
+
+Search preserves Unicode terms and short identifiers. Context budgets cover the
+complete JSON, including semantic metadata; `estimatedTokens` is a coarse size
+estimate. An insufficient budget returns an explicit error. Diff requires two
+published snapshots and reports a missing baseline when there is only one.
 
 ### Analysis Reports
 
@@ -331,6 +345,10 @@ dbgraph serve --mcp
 
 MCP responses are JSON text content. Large responses include response budget metadata and suggested follow-up tools.
 
+`mcp.maxResponseChars` limits tool-result text to the configured Unicode character
+count (minimum `64`). Oversized results return `response_budget_exceeded` rather
+than truncated JSON; the transport envelope is outside this budget.
+
 ## Example: PostgreSQL Teashop
 
 ```bash
@@ -359,7 +377,7 @@ powershell -ExecutionPolicy Bypass -File scripts/integration/postgres-smoke.ps1
 | Safety Boundary | Behavior |
 | --- | --- |
 | Local-first | Project state is stored under `.dbgraph/`. |
-| Database access | `dbgraph snapshot` is the command that connects to the configured database. |
+| Database access | `snapshot` and `sync` capture metadata; `doctor --check-db` checks provider connectivity. |
 | SQL validation | `dbgraph validate-sql` never executes SQL. |
 | Analysis | `dbgraph analyze` works from the local snapshot and graph index. |
 | Samples | Raw sample storage is off by default; sensitive samples are masked when sampling is explicitly enabled. |
@@ -382,7 +400,8 @@ DbGraph is inspired by the developer experience of [CodeGraph](https://github.co
 
 ## Roadmap
 
-- Add broader integration fixtures from real PostgreSQL schemas.
-- Enable MySQL and SQL Server providers when local/containerized services are available.
-- Improve ranking quality with persisted FTS-backed retrieval when needed.
-- Expand SQL impact detection across more statement shapes.
+- Current repair scope: SQL validation and write-safety analysis, SQL source identity, snapshot publication/recovery, Unicode search, response budgets, and the six-platform release matrix.
+- Deferred: external project features and issue suggestions, richer traceability, new benchmarks, and provider expansion.
+- Future work should measure task correctness, tool calls, response size, and actual search/context latency before adding infrastructure.
+
+See the [repair plan and verification status](docs/bug-fix-plan.md), [current roadmap](docs/roadmap.md), and [AI efficiency review](docs/ai-efficiency-review.md). The review separates our own bugs, implemented strengths of other projects, and pain points or proposals from their issues. External ideas remain outside this repair release.

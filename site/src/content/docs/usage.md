@@ -14,7 +14,7 @@ DbGraph is a local-first database context tool. The normal workflow is:
 
 DbGraph stores schema metadata, SQL artifacts, graph edges, and profile summaries. It does not execute SQL during validation, and it does not store business row data by default.
 
-For the full `.dbgraph/dbgraph.config.json` reference, see [configuration.md](configuration.md).
+For the full `.dbgraph/dbgraph.config.json` reference, see [configuration.md](/dbgraph/configuration/).
 
 ## Install Or Run
 
@@ -98,7 +98,7 @@ dbgraph doctor --json --check-db
 
 DbGraph reads configuration from `.dbgraph/dbgraph.config.json`.
 
-The config has four top-level sections:
+The main configuration sections are:
 
 - `database`: provider and connection source.
 - `snapshot`: JSON formatting, profiling depth, and sample limits.
@@ -164,6 +164,18 @@ Profile modes:
 - `sample`: enables allowlisted row sampling only when `dataAccess` also permits it; masked by default.
 
 Snapshot output is written under `.dbgraph/snapshots/`, and the local graph index is rebuilt into `.dbgraph/dbgraph.db`.
+
+A snapshot becomes the latest version only after its graph index and SQL artifacts
+have been stored successfully. A failed capture leaves the previous published
+snapshot as the latest version.
+
+Use `dbgraph sync` to refresh a project. When the schema is unchanged and the
+index is healthy, sync skips rebuilding. If the index is missing, sync rebuilds
+it from the published snapshot instead of reporting a successful skip. A repair
+failure is reported as an error; it does not create a schema change.
+Sync still captures current database metadata before deciding whether the schema
+is unchanged, so the configured provider must be reachable. It is not an offline
+index-repair command.
 
 ### Allowlisted Data Profiling
 
@@ -252,6 +264,11 @@ It ignores noisy directories such as `node_modules/`, `target/`, `bin/`, and `ob
 
 SQL artifacts become query objects in the graph. DbGraph extracts read/write/filter/join dependencies where supported.
 
+Each source file has its own query identity. Files containing the same SQL are
+retained with their source paths; the SQL fingerprint groups equivalent workload
+signals without replacing either source. Renaming or deleting a source is visible
+as a query-object change in the next snapshot diff.
+
 ## Daily CLI Commands
 
 Search graph objects:
@@ -261,6 +278,11 @@ dbgraph search customer
 dbgraph search orders --kind table
 dbgraph search email --kind column --json
 ```
+
+Search preserves Unicode words and short identifiers. Chinese terms can match
+object names or semantic descriptions; this is lexical matching, not automatic
+translation. A nonempty query with no match returns no results rather than an
+unfiltered object list.
 
 Inspect a table:
 
@@ -283,6 +305,14 @@ dbgraph context "refund payment order" --tokens 800
 dbgraph context "which tables are touched by order status changes" --json
 ```
 
+`--tokens` budgets the complete pretty-printed context JSON, including semantic
+metadata, relationships, suggestions, and formatting. `estimatedTokens` rounds
+the JSON's UTF-8 byte length divided by four up to a whole number; this is a
+rough estimate, not an LLM tokenizer or a billing measurement. DbGraph omits
+content to fit the budget and reports a clear error if the budget cannot hold a
+usable JSON response; it never cuts JSON in the middle. Increase the budget or
+narrow the query when more detail is needed.
+
 Validate SQL without executing it:
 
 ```powershell
@@ -290,12 +320,27 @@ dbgraph validate-sql --sql "select * from orders"
 dbgraph validate-sql --file sql/orders.sql --dialect postgres --json
 ```
 
+CLI and MCP require a local snapshot and graph index and apply the same syntax
+and reference checks. Run `dbgraph snapshot` first; validation itself does not
+connect to the database. A missing snapshot or index returns CLI exit code `3`.
+`valid: true` requires no unresolved references or analysis diagnostics. Resolution
+uses table aliases and query scopes: a column on another table cannot satisfy a
+qualified reference. Unsupported SQL forms produce diagnostics rather than a
+claim of complete validation. These checks do not prove that the database would
+execute the SQL successfully, and they never execute it.
+
+The CLI prints its report, then exits with code `2` when `valid` is false. Read
+`diagnostics` and `unresolved` in JSON output before retrying with corrected SQL.
+
 Compare latest snapshot with the previous snapshot:
 
 ```powershell
 dbgraph diff
 dbgraph diff --json
 ```
+
+Diff requires two published snapshots. With zero or one snapshot it reports a
+missing baseline instead of comparing a snapshot with itself.
 
 Check impact before changing an object:
 
@@ -351,6 +396,10 @@ Current rule groups:
 - SQL Workload & Safety: `UPDATE` or `DELETE` statements without `WHERE`.
 - Performance: filters or joins without supporting indexes.
 
+Write-safety checks inspect the outer statement's AST condition. A `WHERE`
+inside a nested query or a string literal does not restrict an outer `UPDATE`
+or `DELETE` that has no condition.
+
 ## Offline Agent Benchmark
 
 Compare raw project context with DbGraph structured context without calling an LLM:
@@ -360,7 +409,7 @@ dbgraph benchmark-agent --scenario teashop --format markdown --output dbgraph-ag
 dbgraph benchmark-agent --scenario teashop --format json
 ```
 
-The benchmark reports estimated tokens, retrieval steps, evidence recall, relevant object precision, and token reduction. See [agent-benchmark.md](agent-benchmark.md).
+The benchmark reports estimated tokens, retrieval steps, evidence recall, relevant object precision, and token reduction. See [agent-benchmark.md](/dbgraph/agent-benchmark/).
 
 ## MCP Server
 
@@ -384,6 +433,13 @@ Available MCP tools:
 
 MCP responses are JSON text content. Large responses include `responseBudget` metadata and suggested follow-up calls.
 
+`mcp.maxResponseChars` caps the total Unicode character count of tool-result text.
+It must be at least `64`. The JSON-RPC envelope
+and transport escaping are outside this content budget. A result that still
+exceeds the limit returns `isError: true` with JSON error kind
+`response_budget_exceeded`; JSON is not truncated. Raise the limit in project
+configuration or request less detail when the response cannot fit.
+
 ## PostgreSQL Teashop Smoke Test
 
 Run the example database:
@@ -401,7 +457,7 @@ The smoke test initializes a temporary project, captures a Postgres snapshot, ru
 
 - `dbgraph validate-sql` never executes SQL.
 - `dbgraph analyze` works from the local snapshot and graph index.
-- `dbgraph snapshot` is the command that connects to the configured database.
+- `dbgraph snapshot` and `dbgraph sync` connect to capture metadata; `doctor --check-db` checks provider connectivity.
 - Raw sample storage is off by default.
 - Sensitive samples are masked when sampling is explicitly enabled.
 - SQLite provider refuses to snapshot `.dbgraph/dbgraph.db`, so DbGraph's internal graph database is not confused with a business SQLite database.

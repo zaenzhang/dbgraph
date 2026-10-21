@@ -1,9 +1,10 @@
 //! Context candidate retrieval and formatting.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use dbgraph_core::model::{DbObject, DbSnapshot};
 use dbgraph_core::semantics::{semantic_description, semantic_metadata};
+use dbgraph_core::{DbGraphError, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::search::{extract_search_terms, search_snapshot, SearchOptions};
@@ -100,27 +101,28 @@ impl ContextBuilder {
         Self { weights }
     }
 
-    /// Builds a compact context package.
-    #[must_use]
+    /// Builds a compact context package within the complete JSON token estimate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an argument error when the budget cannot hold the response envelope
+    /// or any relevant object, and an internal error if serialization fails.
     pub fn build(
         &self,
         snapshot: &DbSnapshot,
         query: &str,
         options: &ContextOptions,
-    ) -> ContextPackage {
+    ) -> Result<ContextPackage> {
         let terms = extract_search_terms(query);
         let mut scored = self.seed_scored_objects(snapshot, query, options.max_objects);
         self.expand_graph_neighbors(snapshot, &mut scored);
         self.apply_statistics_boost(snapshot, &mut scored);
         let workload = WorkloadModel::from_snapshot(snapshot);
         self.apply_workload_boost(&workload, &mut scored);
-        let (context_objects, estimated_tokens) = select_context_objects(scored, options);
-        let relation_paths = relation_paths(snapshot, &context_objects);
-
-        ContextPackage {
+        let mut package = ContextPackage {
             query: query.to_owned(),
-            objects: context_objects,
-            relation_paths,
+            objects: Vec::new(),
+            relation_paths: Vec::new(),
             risks: vec![
                 "Read-only context: verify SQL against your local graph before executing changes."
                     .to_owned(),
@@ -131,8 +133,17 @@ impl ContextBuilder {
                 "dbgraph validate-sql --sql <SQL>".to_owned(),
             ],
             ranking_notes: vec![format!("terms: {}", terms.join(", "))],
-            estimated_tokens,
+            estimated_tokens: 0,
+        };
+        update_token_estimate(&mut package)?;
+        if package.estimated_tokens > options.token_budget {
+            return Err(DbGraphError::invalid_argument(format!(
+                "context token budget {} cannot fit the response envelope (estimated {} tokens); increase the budget or shorten the query",
+                options.token_budget, package.estimated_tokens
+            )));
         }
+        select_context_objects(snapshot, scored, options, &mut package)?;
+        Ok(package)
     }
 
     fn seed_scored_objects(
@@ -216,9 +227,11 @@ impl ContextBuilder {
 }
 
 fn select_context_objects(
+    snapshot: &DbSnapshot,
     scored: BTreeMap<String, (DbObject, f64)>,
     options: &ContextOptions,
-) -> (Vec<ContextObject>, usize) {
+    package: &mut ContextPackage,
+) -> Result<()> {
     let mut objects = scored.into_values().collect::<Vec<_>>();
     objects.sort_by(|left, right| {
         right
@@ -227,30 +240,50 @@ fn select_context_objects(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| left.0.full_name.cmp(&right.0.full_name))
     });
+    let object_names = snapshot
+        .objects
+        .iter()
+        .map(|object| (object.id.as_str(), object.full_name.as_str()))
+        .collect::<HashMap<_, _>>();
 
-    let mut context_objects = Vec::new();
-    let mut estimated_tokens = 0_usize;
+    let mut omitted_for_budget = false;
     for (object, score) in objects {
-        let summary = object_summary(&object);
-        let estimate = estimate_tokens(&object.full_name) + estimate_tokens(&summary) + 4;
-        if context_objects.len() >= options.max_objects
-            || estimated_tokens.saturating_add(estimate) > options.token_budget
-        {
+        if package.objects.len() >= options.max_objects {
             break;
         }
-        estimated_tokens += estimate;
-        context_objects.push(ContextObject {
+        let summary = object_summary(&object);
+        let previous_tokens = package.estimated_tokens;
+        let previous_paths = std::mem::take(&mut package.relation_paths);
+        package.objects.push(ContextObject {
             kind: object.kind.as_str().to_owned(),
             full_name: object.full_name,
             semantic: semantic_metadata(&object.metadata).cloned(),
             summary,
             score,
         });
+        package.relation_paths = relation_paths(snapshot, &object_names, &package.objects);
+        update_token_estimate(package)?;
+        if package.estimated_tokens > options.token_budget {
+            package.objects.pop();
+            package.relation_paths = previous_paths;
+            package.estimated_tokens = previous_tokens;
+            omitted_for_budget = true;
+        }
     }
-    (context_objects, estimated_tokens)
+    if package.objects.is_empty() && omitted_for_budget {
+        return Err(DbGraphError::invalid_argument(format!(
+            "context token budget {} cannot fit any relevant object; increase the budget or narrow the query",
+            options.token_budget
+        )));
+    }
+    Ok(())
 }
 
-fn relation_paths(snapshot: &DbSnapshot, context_objects: &[ContextObject]) -> Vec<String> {
+fn relation_paths(
+    snapshot: &DbSnapshot,
+    object_names: &HashMap<&str, &str>,
+    context_objects: &[ContextObject],
+) -> Vec<String> {
     let selected = context_objects
         .iter()
         .map(|object| object.full_name.as_str())
@@ -259,23 +292,10 @@ fn relation_paths(snapshot: &DbSnapshot, context_objects: &[ContextObject]) -> V
         .edges
         .iter()
         .filter_map(|edge| {
-            let from = snapshot
-                .objects
-                .iter()
-                .find(|object| object.id == edge.from_object_id)?;
-            let to = snapshot
-                .objects
-                .iter()
-                .find(|object| object.id == edge.to_object_id)?;
-            (selected.contains(from.full_name.as_str()) && selected.contains(to.full_name.as_str()))
-                .then(|| {
-                    format!(
-                        "{} -{}-> {}",
-                        from.full_name,
-                        edge.kind.as_str(),
-                        to.full_name
-                    )
-                })
+            let from = object_names.get(edge.from_object_id.as_str())?;
+            let to = object_names.get(edge.to_object_id.as_str())?;
+            (selected.contains(from) && selected.contains(to))
+                .then(|| format!("{from} -{}-> {to}", edge.kind.as_str()))
         })
         .collect()
 }
@@ -294,8 +314,18 @@ fn object_summary(object: &DbObject) -> String {
         )
 }
 
-fn estimate_tokens(text: &str) -> usize {
-    text.split_whitespace().count().max(text.len() / 4)
+fn update_token_estimate(package: &mut ContextPackage) -> Result<()> {
+    loop {
+        let serialized =
+            serde_json::to_string_pretty(package).map_err(|error| DbGraphError::Internal {
+                message: format!("failed to serialize context package: {error}"),
+            })?;
+        let estimate = serialized.len().div_ceil(4);
+        if estimate == package.estimated_tokens {
+            return Ok(());
+        }
+        package.estimated_tokens = estimate;
+    }
 }
 
 #[cfg(test)]
@@ -306,14 +336,16 @@ mod tests {
     #[test]
     fn context_builder_returns_ranked_refund_payment_order_context_with_budget() {
         let snapshot = sample_snapshot();
-        let context = ContextBuilder::new(RankingWeights::default()).build(
-            &snapshot,
-            "refund payment order",
-            &ContextOptions {
-                token_budget: 80,
-                max_objects: 5,
-            },
-        );
+        let context = ContextBuilder::new(RankingWeights::default())
+            .build(
+                &snapshot,
+                "refund payment order",
+                &ContextOptions {
+                    token_budget: 500,
+                    max_objects: 5,
+                },
+            )
+            .expect("context should fit the complete JSON budget");
 
         let names = context
             .objects
@@ -324,7 +356,7 @@ mod tests {
         assert!(names.contains(&"public.refunds"));
         assert!(names.contains(&"public.payments"));
         assert!(names.contains(&"public.orders"));
-        assert!(context.estimated_tokens <= 80);
+        assert!(context.estimated_tokens <= 500);
         assert!(!context.ranking_notes.is_empty());
     }
 
@@ -345,14 +377,16 @@ mod tests {
             }),
         );
 
-        let context = ContextBuilder::new(RankingWeights::default()).build(
-            &snapshot,
-            "orders",
-            &ContextOptions {
-                token_budget: 120,
-                max_objects: 3,
-            },
-        );
+        let context = ContextBuilder::new(RankingWeights::default())
+            .build(
+                &snapshot,
+                "orders",
+                &ContextOptions {
+                    token_budget: 500,
+                    max_objects: 3,
+                },
+            )
+            .expect("semantic metadata should fit the budget");
 
         let orders = context
             .objects
@@ -369,6 +403,74 @@ mod tests {
             Some("Commercial order aggregate")
         );
         assert!(orders.summary.contains("Commercial order aggregate"));
+    }
+
+    #[test]
+    fn context_budget_counts_semantics_and_keeps_smaller_relevant_candidates() {
+        let mut snapshot = sample_snapshot();
+        snapshot.objects[0].metadata.insert(
+            "semantic".to_owned(),
+            serde_json::json!({"allowedValues": (0..500).map(|value| format!("state_{value}")).collect::<Vec<_>>()}),
+        );
+
+        let context = ContextBuilder::new(RankingWeights::default())
+            .build(
+                &snapshot,
+                "refunds payment",
+                &ContextOptions {
+                    token_budget: 500,
+                    max_objects: 5,
+                },
+            )
+            .expect("smaller relevant objects should still fit");
+
+        assert!(!context
+            .objects
+            .iter()
+            .any(|object| object.full_name == "public.refunds"));
+        assert!(context
+            .objects
+            .iter()
+            .any(|object| object.full_name == "public.payments"));
+        let json = serde_json::to_string_pretty(&context).expect("context JSON");
+        assert!(json.len() <= 500 * 4);
+        assert!(context.estimated_tokens * 4 >= json.len());
+        assert!(context.estimated_tokens <= 500);
+    }
+
+    #[test]
+    fn context_distinguishes_no_matches_from_insufficient_budget() {
+        let mut snapshot = sample_snapshot();
+        let builder = ContextBuilder::new(RankingWeights::default());
+        let options = ContextOptions {
+            token_budget: 500,
+            max_objects: 5,
+        };
+        let empty = builder
+            .build(&snapshot, "不存在", &options)
+            .expect("no matches is valid");
+        assert!(empty.objects.is_empty());
+        assert!(builder
+            .build(
+                &snapshot,
+                "refund",
+                &ContextOptions {
+                    token_budget: 1,
+                    max_objects: 5
+                }
+            )
+            .is_err());
+        assert!(builder
+            .build(&snapshot, &"very_long_query ".repeat(500), &options)
+            .is_err());
+
+        snapshot.objects.truncate(1);
+        snapshot.edges.clear();
+        snapshot.objects[0].metadata.insert(
+            "semantic".to_owned(),
+            serde_json::json!({"description": "refund ".repeat(1000)}),
+        );
+        assert!(builder.build(&snapshot, "refund", &options).is_err());
     }
 
     fn sample_snapshot() -> DbSnapshot {

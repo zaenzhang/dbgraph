@@ -13,11 +13,10 @@ use dbgraph_core::semantics::SemanticMetadataConfig;
 use dbgraph_core::snapshot::{now_unix_ms, SnapshotStore};
 use dbgraph_core::sync::{plan_incremental_sync, SyncPlan};
 use dbgraph_core::{DbGraphError, Result};
-use dbgraph_graph::rebuild_index;
 use dbgraph_provider::{ProviderConnectionConfig, ProviderRegistry};
 use dbgraph_sql::{
-    analyze_sql, resolve_sql_edge_targets, scan_sql_files, sql_artifact_to_graph, ScanOptions,
-    SqlDialect, SqlParser,
+    resolve_sql_edge_targets, scan_sql_files, sql_artifact_to_graph, ScanOptions, SqlDialect,
+    SqlParser,
 };
 use dbgraph_storage::{GraphRepository, SqlArtifactRecord as StoredSqlArtifactRecord};
 use serde::Serialize;
@@ -151,12 +150,13 @@ fn write_snapshot_and_index(
     sql_artifacts: &[StoredSqlArtifactRecord],
     profiling_options: &ProfilingOptions,
 ) -> Result<SnapshotSummary> {
-    let snapshot_path =
-        SnapshotStore::new(context).write_snapshot(snapshot, config.snapshot.pretty_json)?;
-    let stored_snapshot = SnapshotStore::new(context).read_snapshot(&snapshot_path)?;
     let mut repository = GraphRepository::open(context.graph_db_path())?;
-    let index_summary = rebuild_index(&mut repository, &stored_snapshot)?;
-    repository.insert_sql_artifacts(sql_artifacts)?;
+    let store = SnapshotStore::new(context);
+    let snapshot_path =
+        store.write_snapshot_indexed(snapshot, config.snapshot.pretty_json, |stored| {
+            repository.rebuild_snapshot_with_artifacts(stored, sql_artifacts)
+        })?;
+    let stored_snapshot = store.read_snapshot(&snapshot_path)?;
 
     Ok(SnapshotSummary {
         project_root: context.project_root().to_path_buf(),
@@ -164,7 +164,7 @@ fn write_snapshot_and_index(
         graph_db_path: context.graph_db_path(),
         provider: stored_snapshot.provider.clone(),
         database_name: stored_snapshot.database_name.clone(),
-        object_count: index_summary.object_count,
+        object_count: stored_snapshot.objects.len(),
         table_count: stored_snapshot
             .objects
             .iter()
@@ -175,9 +175,9 @@ fn write_snapshot_and_index(
             .iter()
             .filter(|object| object.kind.as_str() == "column")
             .count(),
-        edge_count: index_summary.edge_count,
-        table_profile_count: index_summary.table_profile_count,
-        column_profile_count: index_summary.column_profile_count,
+        edge_count: stored_snapshot.edges.len(),
+        table_profile_count: stored_snapshot.table_profiles.len(),
+        column_profile_count: stored_snapshot.column_profiles.len(),
         sql_artifact_count: sql_artifacts.len(),
         profiling_mode: profiling_options.mode.to_string(),
         schema_hash: stored_snapshot.schema_hash,
@@ -189,6 +189,7 @@ fn write_snapshot_and_index(
 pub(crate) struct SyncSummary {
     pub(crate) project_root: PathBuf,
     pub(crate) plan: SyncPlan,
+    pub(crate) index_rebuilt: bool,
     pub(crate) snapshot: Option<SnapshotSummary>,
 }
 
@@ -200,9 +201,24 @@ pub(crate) fn sync_project(start: impl AsRef<Path>) -> Result<SyncSummary> {
     let config = load_config_with_snapshot_overrides(&context, SnapshotCliOptions::default())?;
     let (snapshot, sql_artifacts, profiling_options) = capture_snapshot(&context, &config)?;
     let plan = plan_incremental_sync(previous.as_ref(), &snapshot)?;
+    let mut index_rebuilt = false;
     let snapshot = if plan.can_skip_rebuild() {
+        let previous = previous
+            .as_ref()
+            .expect("unchanged sync has a previous snapshot");
+        let mut repository = GraphRepository::open(context.graph_db_path())?;
+        if !repository.has_snapshot(&previous.id)? {
+            let mut artifacts = sql_artifacts;
+            for artifact in &mut artifacts {
+                artifact.snapshot_id.clone_from(&previous.id);
+                artifact.id = format!("sql:{}:{}", previous.id, artifact.source_path);
+            }
+            repository.rebuild_snapshot_with_artifacts(previous, &artifacts)?;
+            index_rebuilt = true;
+        }
         None
     } else {
+        index_rebuilt = true;
         Some(write_snapshot_and_index(
             &context,
             &config,
@@ -216,6 +232,7 @@ pub(crate) fn sync_project(start: impl AsRef<Path>) -> Result<SyncSummary> {
         project_root: context.project_root().to_path_buf(),
         snapshot,
         plan,
+        index_rebuilt,
     })
 }
 
@@ -229,7 +246,7 @@ fn enrich_snapshot_with_sql(
     for source in sources {
         let parser = SqlParser::new(dialect);
         let parsed = parser.parse(&source.raw_sql)?;
-        let analysis = analyze_sql(&source.raw_sql, dialect)?;
+        let analysis = dbgraph_sql::analyze_sql_with_snapshot(&source.raw_sql, dialect, snapshot)?;
         let source_path = source.source_path.to_string_lossy().replace('\\', "/");
         let mut graph = sql_artifact_to_graph(&snapshot.id, &source_path, &parsed, &analysis)?;
         resolve_sql_edge_targets(snapshot, &mut graph.edges);
@@ -299,7 +316,14 @@ pub(crate) fn print_sync_summary(summary: &SyncSummary) {
     match &summary.plan {
         SyncPlan::Unchanged { schema_hash } => {
             println!("Schema unchanged: {schema_hash}");
-            println!("Skipped snapshot write and graph index rebuild");
+            println!(
+                "{}",
+                if summary.index_rebuilt {
+                    "Restored missing graph index; kept existing snapshot"
+                } else {
+                    "Skipped snapshot write and graph index rebuild"
+                }
+            );
         }
         SyncPlan::Changed {
             previous_hash,

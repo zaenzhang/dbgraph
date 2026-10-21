@@ -1,6 +1,7 @@
 //! JSON snapshot writer, reader, path resolver, and schema hashing.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -46,6 +47,20 @@ impl SnapshotStore {
     ///
     /// Returns an error when hashing, serialization, or filesystem writes fail.
     pub fn write_snapshot(&self, snapshot: &DbSnapshot, pretty: bool) -> Result<PathBuf> {
+        self.write_snapshot_indexed(snapshot, pretty, |_| Ok(()))
+    }
+
+    /// Stages JSON, completes the index operation, then atomically publishes the file.
+    /// Failed staging/indexing leaves the previous published snapshot untouched.
+    ///
+    /// # Errors
+    /// Returns serialization, filesystem, or index operation errors.
+    pub fn write_snapshot_indexed(
+        &self,
+        snapshot: &DbSnapshot,
+        pretty: bool,
+        index: impl FnOnce(&DbSnapshot) -> Result<()>,
+    ) -> Result<PathBuf> {
         fs::create_dir_all(&self.snapshots_dir)
             .map_err(|source| DbGraphError::io(&self.snapshots_dir, source))?;
 
@@ -61,8 +76,13 @@ impl SnapshotStore {
         .map_err(|source| DbGraphError::Internal {
             message: format!("failed to serialize snapshot: {source}"),
         })?;
-        fs::write(&path, format!("{content}\n"))
-            .map_err(|source| DbGraphError::io(&path, source))?;
+        let mut staged = tempfile::NamedTempFile::new_in(&self.snapshots_dir)
+            .map_err(|source| DbGraphError::io(&self.snapshots_dir, source))?;
+        writeln!(staged, "{content}").map_err(|source| DbGraphError::io(staged.path(), source))?;
+        index(&snapshot)?;
+        staged
+            .persist(&path)
+            .map_err(|error| DbGraphError::io(&path, error.error))?;
         Ok(path)
     }
 
@@ -109,7 +129,11 @@ impl SnapshotStore {
     /// Returns an error when the snapshots directory cannot be read.
     pub fn previous_snapshot_path(&self) -> Result<Option<PathBuf>> {
         let paths = self.snapshot_paths()?;
-        Ok(paths.get(paths.len().saturating_sub(2)).cloned())
+        Ok(paths
+            .len()
+            .checked_sub(2)
+            .and_then(|index| paths.get(index))
+            .cloned())
     }
 
     /// Lists snapshot paths in ascending file-name order.
@@ -250,8 +274,8 @@ mod tests {
 
     #[test]
     fn write_and_read_latest_snapshot() {
-        let temp = TempDir::new();
-        let store = SnapshotStore::from_dir(&temp.path);
+        let temp = tempfile::tempdir().unwrap();
+        let store = SnapshotStore::from_dir(temp.path());
         let snapshot = sample_snapshot();
 
         let path = store
@@ -271,11 +295,35 @@ mod tests {
     }
 
     #[test]
+    fn failed_index_does_not_publish_and_previous_requires_two_snapshots() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SnapshotStore::from_dir(temp.path());
+        assert!(store.previous_snapshot_path().unwrap().is_none());
+        let first = sample_snapshot();
+        let first_path = store.write_snapshot(&first, false).unwrap();
+        assert!(store.previous_snapshot_path().unwrap().is_none());
+        let mut next = first.clone();
+        next.id = "s2".to_owned();
+        next.created_at_unix_ms = 2;
+        let result = store.write_snapshot_indexed(&next, false, |_| {
+            Err(DbGraphError::invalid_argument("injected index failure"))
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            store.latest_snapshot_path().unwrap(),
+            Some(first_path.clone())
+        );
+        assert_eq!(store.snapshot_paths().unwrap().len(), 1);
+        store.write_snapshot(&next, false).unwrap();
+        assert_eq!(store.previous_snapshot_path().unwrap(), Some(first_path));
+    }
+
+    #[test]
     fn corrupted_json_reports_clear_error() {
-        let temp = TempDir::new();
-        let path = temp.path.join("bad.json");
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("bad.json");
         fs::write(&path, "{ not json").expect("bad json should be written");
-        let store = SnapshotStore::from_dir(&temp.path);
+        let store = SnapshotStore::from_dir(temp.path());
 
         let err = store
             .read_snapshot(&path)
@@ -312,29 +360,5 @@ mod tests {
             "column:public.users.id",
         )];
         snapshot
-    }
-
-    struct TempDir {
-        path: PathBuf,
-    }
-
-    impl TempDir {
-        fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "dbgraph-snapshot-test-{}-{}",
-                std::process::id(),
-                now_unix_ms().expect("time should be valid")
-            ));
-            fs::create_dir_all(&path).expect("temp dir should be created");
-            Self { path }
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            if self.path.exists() {
-                let _ = fs::remove_dir_all(&self.path);
-            }
-        }
     }
 }
