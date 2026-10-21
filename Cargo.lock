@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "dbgraph-cli"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "dbgraph-core",
  "dbgraph-graph",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "dbgraph-core"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "dbgraph-graph"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "dbgraph-core",
  "dbgraph-sql",
@@ -223,11 +223,11 @@ dependencies = [
 
 [[package]]
 name = "dbgraph-installer"
-version = "0.1.3"
+version = "0.1.4"
 
 [[package]]
 name = "dbgraph-mcp"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "dbgraph-core",
  "dbgraph-graph",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "dbgraph-provider"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "dbgraph-core",
  "postgres",
@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "dbgraph-sql"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "dbgraph-core",
  "globset",
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "dbgraph-storage"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "dbgraph-core",
  "rusqlite",

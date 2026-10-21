@@ -742,7 +742,10 @@ mod tests {
         assert!(sensitive.suggested_fix.contains("mask"));
         assert!(sensitive.confidence >= 0.8);
         assert!(sensitive.tags.contains(&"pii".to_owned()));
-        assert!(report.suppressed_findings.is_empty());
+        assert_eq!(
+            report.suppressed_findings,
+            [] as [super::AnalysisFinding; 0]
+        );
         assert!(report.suppression_counts.is_empty());
         assert!(report.gate.is_none());
 
@@ -776,7 +779,7 @@ mod tests {
             },
         );
 
-        assert!(!report.findings.is_empty());
+        assert_ne!(report.findings, [] as [super::AnalysisFinding; 0]);
         assert!(report
             .findings
             .iter()

@@ -266,7 +266,7 @@ mod tests {
 
         let edges = infer_relations(&snapshot, &options);
 
-        assert!(edges.is_empty());
+        assert_eq!(edges, [] as [DbEdge; 0]);
     }
 
     #[test]
@@ -281,7 +281,7 @@ mod tests {
 
         let edges = infer_relations(&snapshot, &InferenceOptions::default());
 
-        assert!(edges.is_empty());
+        assert_eq!(edges, [] as [DbEdge; 0]);
     }
 
     fn sample_snapshot() -> DbSnapshot {

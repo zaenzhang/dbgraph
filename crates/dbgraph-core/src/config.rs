@@ -505,7 +505,7 @@ mod tests {
         let config = DbGraphConfig::default();
 
         assert_eq!(config.data_access.default_mode, DataAccessMode::SchemaOnly);
-        assert!(config.data_access.tables.is_empty());
+        assert_eq!(config.data_access.tables, [] as [DataAccessTableRule; 0]);
     }
 
     #[test]

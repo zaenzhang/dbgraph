@@ -730,11 +730,11 @@ mod tests {
                 "{sql}"
             );
         }
-        assert!(
+        assert_eq!(
             analyze_sql("delete from orders where id=1", SqlDialect::Postgres)
                 .unwrap()
-                .unsafe_writes
-                .is_empty()
+                .unsafe_writes,
+            [] as [String; 0]
         );
     }
 

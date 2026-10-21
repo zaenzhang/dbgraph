@@ -357,7 +357,7 @@ mod tests {
         assert!(names.contains(&"public.payments"));
         assert!(names.contains(&"public.orders"));
         assert!(context.estimated_tokens <= 500);
-        assert!(!context.ranking_notes.is_empty());
+        assert_ne!(context.ranking_notes, [] as [String; 0]);
     }
 
     #[test]
@@ -449,7 +449,7 @@ mod tests {
         let empty = builder
             .build(&snapshot, "不存在", &options)
             .expect("no matches is valid");
-        assert!(empty.objects.is_empty());
+        assert_eq!(empty.objects, [] as [super::ContextObject; 0]);
         assert!(builder
             .build(
                 &snapshot,

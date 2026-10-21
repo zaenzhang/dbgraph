@@ -961,10 +961,10 @@ mod tests {
             .rebuild_snapshot_with_artifacts(&changed, &[artifact])
             .is_err());
         assert_eq!(repo.object_count(&snapshot.id).unwrap(), 2);
-        assert!(repo
-            .sql_artifacts_by_snapshot(&snapshot.id)
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            repo.sql_artifacts_by_snapshot(&snapshot.id).unwrap(),
+            [] as [SqlArtifactRecord; 0]
+        );
     }
 
     #[test]

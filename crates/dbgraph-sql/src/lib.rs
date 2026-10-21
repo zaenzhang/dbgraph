@@ -574,8 +574,8 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::{
-        analyze_sql, scan_sql_files, sql_artifact_to_graph, ParseStatus, ScanOptions, SqlDialect,
-        SqlParser,
+        analyze_sql, scan_sql_files, sql_artifact_to_graph, ParseDiagnostic, ParseStatus,
+        ParsedStatement, ScanOptions, SqlDialect, SqlParser,
     };
 
     #[test]
@@ -590,10 +590,10 @@ mod tests {
         assert_eq!(ok.status, ParseStatus::Parsed);
         assert_eq!(ok.raw_sql, " select * from public.users where id = 1 ");
         assert_eq!(ok.normalized_sql, "SELECT * FROM public.users WHERE id = 1");
-        assert!(!ok.statements.is_empty());
-        assert!(ok.diagnostics.is_empty());
+        assert_ne!(ok.statements, [] as [ParsedStatement; 0]);
+        assert_eq!(ok.diagnostics, [] as [ParseDiagnostic; 0]);
         assert_eq!(bad.status, ParseStatus::Failed);
-        assert!(!bad.diagnostics.is_empty());
+        assert_ne!(bad.diagnostics, [] as [ParseDiagnostic; 0]);
         assert_eq!(bad.raw_sql, "select from");
     }
 

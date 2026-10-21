@@ -340,7 +340,10 @@ mod tests {
     fn search_returns_no_matches_without_terms_but_allows_filter_only_queries() {
         let snapshot = sample_snapshot();
         for query in ["不存在", "unmatched", "!!!", "the and", ""] {
-            assert!(search_snapshot(&snapshot, query, &SearchOptions::default()).is_empty());
+            assert_eq!(
+                search_snapshot(&snapshot, query, &SearchOptions::default()),
+                [] as [super::SearchResult; 0]
+            );
         }
         let filtered = search_snapshot(
             &snapshot,

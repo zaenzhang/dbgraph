@@ -1539,7 +1539,10 @@ mod tests {
             .edges
             .iter()
             .any(|edge| edge.kind == DbEdgeKind::References));
-        assert!(!snapshot.table_profiles.is_empty());
+        assert_ne!(
+            snapshot.table_profiles,
+            [] as [dbgraph_core::model::TableProfile; 0]
+        );
     }
 
     #[allow(clippy::too_many_lines)]

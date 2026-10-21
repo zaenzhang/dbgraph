@@ -141,7 +141,7 @@ mod tests {
             },
         );
 
-        assert!(next.table_profiles.is_empty());
+        assert_eq!(next.table_profiles, [] as [TableProfile; 0]);
         assert_eq!(
             next.metadata
                 .get("profiling")

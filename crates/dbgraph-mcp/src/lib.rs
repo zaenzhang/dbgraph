@@ -1431,7 +1431,7 @@ mod tests {
         run_stdio(Cursor::new("not-json\n"), &mut stdout, &mut stderr)
             .expect("parse errors are protocol responses");
 
-        assert!(stderr.is_empty());
+        assert_eq!(stderr, [] as [u8; 0]);
         let response = serde_json::from_slice::<serde_json::Value>(&stdout).expect("valid json");
         assert_eq!(response["id"], serde_json::Value::Null);
         assert_eq!(response["error"]["code"], -32700);
@@ -1641,10 +1641,13 @@ mod tests {
             .any(|change| change["fullName"] == "public.orders.status"));
         assert_eq!(validate["executed"], false);
         assert_eq!(validate["valid"], true);
-        assert!(validate["unresolved"]
-            .as_array()
-            .expect("unresolved")
-            .is_empty());
+        assert_eq!(
+            validate["unresolved"]
+                .as_array()
+                .expect("unresolved")
+                .as_slice(),
+            [] as [serde_json::Value; 0]
+        );
     }
 
     #[test]
@@ -1836,7 +1839,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         run_stdio(Cursor::new(input), &mut stdout, &mut stderr).expect("stdio server should run");
-        assert!(stderr.is_empty());
+        assert_eq!(stderr, [] as [u8; 0]);
         String::from_utf8(stdout)
             .expect("stdout should be utf8")
             .lines()
