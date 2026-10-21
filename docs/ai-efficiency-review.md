@@ -2,7 +2,7 @@
 
 日期：2026-10-21（Europe/Budapest）。源码基线：`3c6a730`，workspace 版本 `0.1.2`。
 
-状态：**A 类 F01–F10 已完成修复与本地验收，准备发布 v0.1.4**。下文保留修复前的复现证据；B/C/I 类建议未实施。发布结果见 [修复计划](bug-fix-plan.md) 和 [v0.1.4 说明](releases/v0.1.4.md)。
+状态：**A 类 F01–F10 已完成修复与验收，v0.1.4 已发布、官网已更新**。下文保留修复前的复现证据；B/C/I 类建议未实施。发布结果见 [修复计划](bug-fix-plan.md) 和 [v0.1.4 说明](releases/v0.1.4.md)。
 
 ## 判断标准与验证范围
 
@@ -146,7 +146,7 @@ set status = (select email from customers where id = 1);
 | F07 | 缺失/空索引恢复；实际 sync 返回 indexRebuilt=true、snapshot=null，保留一个 JSON，search 恢复。sync 仍先采集 provider，需要数据库可访问。 |
 | F08 | 零/一快照无 previous，两个比较不同 ID；实际单快照 diff 退出 3，重试产生两个快照后 diff 正常。 |
 | F09 | AST 外层 selection 判断；实际 analyze 同时检出 risk.update_without_where 与 risk.query_reads_sensitive_column。只解析风险 SQL，没有执行。 |
-| F10 | 补 macos-15-intel，workflow/installer/docs 六平台一致。远端 v0.1.2 实际为五个平台二进制；v0.1.4 runner/资产结果发布后写回计划，不能替代原生安装验收。 |
+| F10 | 补 macos-15-intel，workflow/installer/docs 六平台一致。远端 v0.1.2 实际为五个平台二进制；v0.1.4 六平台 runner 构建和资产上传全部成功；Windows x64 下载包 CLI/MCP 冒烟通过，其余平台原生运行/安装未验证。 |
 
 - **[源码复核发现，已修复]** 根 npm package 为 0.1.2，嵌套 launcher package 仍为 0.1.0，而 launcher 实际读取嵌套版本。现统一为 0.1.4，避免新版 wrapper 下载旧二进制。
 - **[官网冒烟发现，已修复]** 触碰页面的正文 `.md` 链接与缺失 favicon 导致 404；修复后桌面导航、手机中文页通过，详见修复计划。
@@ -154,8 +154,10 @@ set status = (select email from customers where id = 1);
 - **[测试夹具问题，已修复]** 旧 snapshot 测试用毫秒时间戳创建目录，单测独立通过、并行时互删导致 PermissionDenied。改用已有 tempfile 库，没有串行掩盖竞态。
 - **[验证脚本问题，已纠正]** 首次最终冒烟把 CLI search 的 `{query, results}` 报告误当数组而 KeyError；按实际合同读取 results 后通过。Windows GBK/UTF-8 读取差异也仅修正脚本编码。
 - 合并后 workspace **152 项测试通过**；其中 live PostgreSQL 用例无连接配置而提前返回，不能记为真实服务通过。fmt、全 target clippy（`-D warnings`）、CLI build 通过。隔离 SQLite CLI/MCP 冒烟通过；临时记录 `dbgraph-v013-smoke-bokq0lc2/smoke-result.json`。
-- **[云端检查发现，已修复]** Rust 1.99.1 的新增 Clippy 规则要求等价的空集合断言写法；保留测试语义，不禁用规则。v0.1.3 release 构建已取消，但三个平台资产已先上传；不完整 release 已撤回草稿，保留标签，转用 v0.1.4；云端 PostgreSQL 16 冒烟和官网部署已通过，最终发布记录见计划。
+- **[云端检查发现，已修复]** Rust 1.99.1 的新增 Clippy 规则要求等价的空集合断言写法；保留测试语义，不禁用规则。v0.1.3 release 构建已取消，但三个平台资产已先上传；不完整 release 已撤回草稿，保留标签，转用 v0.1.4。v0.1.4 的 CI、PostgreSQL 16 集成、六平台发布和官网部署均已通过，详见计划。
 - 未新增 hash 校验、性能硬门槛、精确评分断言或在线 LLM 调用；未实施 B/C/I 类候选功能。
+
+- 正式 Windows x64 下载包再次通过相同隔离 CLI/MCP 冒烟；用户最终要求发布后停止，B/C/I 继续暂缓，未派发云端后续工作。
 
 ## B. 其他项目已实现的优点
 

@@ -1,6 +1,6 @@
 # 项目自身 bug 修复计划
 
-日期：2026-10-21。范围只包含 [审查 A 类](ai-efficiency-review.md#A-项目自身-bug) F01–F10。B/C 类、I01–I05 的能力扩展不实施。状态：三轮计划审查及实施后独立复核完成，F01–F10 本地验收通过，准备发布 v0.1.4。
+日期：2026-10-21。范围只包含 [审查 A 类](ai-efficiency-review.md#A-项目自身-bug) F01–F10。B/C 类、I01–I05 的能力扩展不实施。状态：三轮计划审查及实施后独立复核完成，F01–F10 修复、必要边界测试及本地/云端验收完成，v0.1.4 已发布，官网已部署；后续扩展按最新指示暂缓。
 
 ## 执行次序
 
@@ -56,17 +56,24 @@
 - 真实 CLI/MCP：5 个错误 SQL 结论一致、3 个合法对照通过；投影敏感字段/外层无条件更新正确报告；中文匹配与无答案、完整 context 预算、MCP 200 字符限制通过。
 - 重复 SQL 来源 snapshot 成功；缺索引 sync 恢复；artifact 写入故障保留旧 latest，清除故障后 snapshot/diff 成功。未开展断电、跨平台原生运行或大规模延迟测试。
 - 独立 SQL 复核修正三处作用域边界；存储只读复核没有阻断项，明确 sync 仍需 provider 可访问。预算计算经性能复核复用一次对象名称映射，未新增常驻缓存。
-- 最终版本统一为 v0.1.4，包含此前落后的嵌套 npm launcher package；线上结果完成后写回此处。
+- 最终版本统一为 v0.1.4，包含此前落后的嵌套 npm launcher package；[GitHub Release](https://github.com/zaenzhang/dbgraph/releases/tag/v0.1.4) 和[官网](https://zaenzhang.github.io/dbgraph/)已更新。
 
 ### 云端验证与发布记录
 
 - **[云端检查发现，已修复]** v0.1.3 的 CI 使用 Rust 1.99.1，较本地 1.95 新增 `clippy::assert_is_empty`，在测试断言处失败；并非产品运行失败。保持原测试条件，改为可显示内容的等价 `assert_eq!`/`assert_ne!`，不禁用 lint、不增加测试门槛。
 - v0.1.3 发布构建已取消；取消与上传存在竞态，已有三个平台资产上传，随后将不完整 release 撤回为草稿。保留标签及草稿资产，不移动或覆盖；后续使用 v0.1.4。
 - [PostgreSQL 16 集成冒烟](https://github.com/zaenzhang/dbgraph/actions/runs/39641845760) 已通过，覆盖 snapshot/sample/search/validate/analyze/benchmark。它是云端合成数据库验证，与本地无连接而跳过的 live 用例分开记录。
-- [官网部署](https://github.com/zaenzhang/dbgraph/actions/runs/39641880377) 已成功。本地 Rust 1.99.1 的 152 项测试及全 target clippy 已通过；v0.1.4 版本同步后的云端 CI、六平台资产和最终部署待完成。
+- [官网部署](https://github.com/zaenzhang/dbgraph/actions/runs/39641880377) 已成功。本地 Rust 1.99.1 的 152 项测试及全 target clippy 已通过；v0.1.4 的 [CI](https://github.com/zaenzhang/dbgraph/actions/runs/39642635417)、[PostgreSQL 集成](https://github.com/zaenzhang/dbgraph/actions/runs/39642635269) 和 [官网部署](https://github.com/zaenzhang/dbgraph/actions/runs/39642665656) 已成功，[六平台 release 工作流](https://github.com/zaenzhang/dbgraph/actions/runs/39642635092) 也已全部成功。
 - **[发布验证发现，已处置]** 现有 CI 与各平台 release 上传互相独立，取消不能收回已经上传的部分资产。本次将不完整候选转草稿，并核对最终六平台完整性；没有改变既有 tag-only 触发策略。
 - 官网线上抽查通过：首页已显示 Reliability update，实际 usage → configuration 导航成功，favicon 返回 200 / image/svg+xml。线上初始 favicon 定位器未匹配 `shortcut icon`，按实际引用核实后通过，属于检查脚本问题。
 
-## 发布后的后续授权
+- **[发布验证发现，已记录]** v0.1.4 预建 draft 不能作为发布门禁：现有 `action-gh-release` 上传动作会把它转为公开状态。CI 已通过后，仍逐个平台核对资产及最终工作流结论；本次没有改 tag-only 策略或发布架构。后续若调整发布门禁，应在 I04 中单独审查成本与操作合同。
 
-用户已允许本轮发布完成后开始 B/C 类优点与 issue 建议，并指定云端任务 `01a15f68-42bc-70d2-adb9-140fd5f7904e`（设置 dbgraph）承接。本轮 release 不混入这些功能；交接时以最新 master、A 类修复事实和本审查 B/C 清单为基线，先重新核实适用性与来源、审查下一阶段计划，再实施有价值的切片。
+- Windows x64 正式下载包报告 `dbgraph 0.1.4`，并完整通过隔离 SQLite CLI/MCP 冒烟（与本地构建相同的正常/错误/预算/恢复用例）。记录位于临时目录 `dbgraph-v014-release-ewlrlmxm/verification.json` 与 `dbgraph-v014-release-smoke-082aodnd/smoke-result.json`，未执行 hash 校验。
+
+- v0.1.4 的 macOS/Linux/Windows × x64/ARM64 六个二进制归档均已上传；保留既有 workflow 生成的校验文件，本轮没有新增校验流程。原生运行仅验证 Windows x64，六平台构建成功不代表所有安装器/升级/原生运行均已验收。
+- 官网对应提交 `2113dd6` 的部署成功；最终后续提交仅回写仓库验证文档与发布记录，不改变站点内容或发布二进制。
+
+## 后续工作暂缓
+
+用户曾允许发布后由指定云端任务承接 B/C 类，但随后明确要求“发布完成后后面的先不做了”。以最新指示为准：本次发布完成后停止，B/C/I 扩展继续暂缓；未向云端任务派发后续工作。
