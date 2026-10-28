@@ -284,6 +284,23 @@ object names or semantic descriptions; this is lexical matching, not automatic
 translation. A nonempty query with no match returns no results rather than an
 unfiltered object list.
 
+CLI and MCP share the same search report. `snapshot` contains `id`, `provider`,
+`databaseName`, and `createdAtUnixMs`; `liveState: "not_checked"` means the capture
+time does not establish that today's database is unchanged. SQL results retain
+the existing `sourcePath` from the captured object's metadata.
+
+`diagnostics.matchMode: "lexical_or"` means any extracted term can match a name,
+full name, or metadata. `matchedTerms` and `unmatchedTerms` describe evidence
+across the filtered candidates, including matches omitted by the result limit;
+`uncheckedTerms` applies when there were no candidates to examine. Empty term
+lists are omitted. Status distinguishes `matched`, `empty_snapshot`,
+`no_search_terms`, `no_candidates`, and `no_term_match`. A partial lexical match
+does not mean the whole task is answered; no match does not prove a business
+concept absent. `filters` records the applied kind/schema/name filters, and
+`diagnostics.coverage` counts snapshot objects, candidates, matches, returned
+results, and `omittedByLimit`. Filter-only queries deliberately browse a subset;
+DbGraph does not automatically loosen a filter or rewrite an unmatched query.
+
 Inspect a table:
 
 ```powershell
@@ -305,8 +322,17 @@ dbgraph context "refund payment order" --tokens 800
 dbgraph context "which tables are touched by order status changes" --json
 ```
 
-`--tokens` budgets the complete pretty-printed context JSON, including semantic
-metadata, relationships, suggestions, and formatting. `estimatedTokens` rounds
+Context reuses those lexical diagnostics for its seeds, then expands one graph
+hop. Objects identify their snapshot-local `id` and `origin`: `lexical_match`,
+`filter_match`, or `graph_neighbor`. A neighbor need not match the query or its
+filters; filters constrain seeds. Context `coverage` counts `seedObjects` and
+`neighborObjects`, plus `omittedByLimit`, `omittedByBudget`, `omittedRelations`,
+and `omittedSuggestions`. Relation omissions count edges between returned
+objects, not every edge in the snapshot.
+
+`--tokens` budgets the complete pretty-printed context JSON, including provenance,
+diagnostics, semantic metadata, relationships, concrete suggestions, omission
+counts, and formatting. `estimatedTokens` rounds
 the JSON's UTF-8 byte length divided by four up to a whole number; this is a
 rough estimate, not an LLM tokenizer or a billing measurement. DbGraph omits
 content to fit the budget and reports a clear error if the budget cannot hold a
@@ -431,7 +457,34 @@ Available MCP tools:
 - `dbgraph_diff`
 - `dbgraph_validate_sql`
 
-MCP responses are JSON text content. Large responses include `responseBudget` metadata and suggested follow-up calls.
+MCP responses are JSON text content. Some detail tools include `responseBudget`
+metadata when limiting collections; search/context use the coverage counts
+described above.
+
+Search/context `suggestedNextTools` contains at most two concrete
+`{tool, arguments, reason}` entries. Pass `tool` as the next `tools/call.name` and
+copy `arguments` unchanged; its `projectPath` preserves project scope even when
+the server runs elsewhere. For example, after locating `public.orders` in a
+project at `C:/work/shop`, a suggestion can be:
+
+```json
+{
+  "tool": "dbgraph_table",
+  "arguments": {"projectPath": "C:/work/shop", "table": "public.orders"},
+  "reason": "inspect_snapshot_table"
+}
+```
+
+The corresponding CLI path is `dbgraph table C:/work/shop public.orders --json`.
+Use `dbgraph context C:/work/shop "orders status" --tokens 1600 --json` for the
+task context. Other suggestions use `dbgraph_relations` with a real object ID,
+or `dbgraph_validate_sql` with the snapshot's existing `normalizedSql` and an
+explicit dialect; validation does not execute it. The CLI equivalents are
+`dbgraph relations` and `dbgraph validate-sql`. Empty search candidates produce
+no invented suggestions. Context can suggest a real seed omitted from its
+final `objects` by the budget, making that evidence available for follow-up.
+Every follow-up reads the latest snapshot at its own execution time; compare
+report snapshot IDs if capture occurs between calls.
 
 `mcp.maxResponseChars` caps the total Unicode character count of tool-result text.
 It must be at least `64`. The JSON-RPC envelope

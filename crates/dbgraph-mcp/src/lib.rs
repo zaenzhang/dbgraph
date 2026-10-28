@@ -14,7 +14,7 @@ use dbgraph_graph::analysis::{AnalysisAnalyzer, AnalysisOptions, AnalysisScope};
 use dbgraph_graph::context::{ContextBuilder, ContextOptions, RankingWeights};
 use dbgraph_graph::impact::{ImpactAnalyzer, ImpactOptions, ImpactReport};
 use dbgraph_graph::relations::{relations_for, Direction, RelationsOptions};
-use dbgraph_graph::search::{search_snapshot, SearchOptions, SearchResult};
+use dbgraph_graph::search::{search_snapshot, SearchOptions};
 use dbgraph_sql::{analyze_sql_with_snapshot, SqlDialect};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -49,7 +49,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Minimal tool registry. DBG-0601 intentionally exposes no tools yet.
+/// Registry of the existing read-only local snapshot tools.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolRegistry;
 
@@ -145,7 +145,7 @@ fn status_tool() -> ToolDefinition {
 fn search_tool() -> ToolDefinition {
     ToolDefinition {
         name: "dbgraph_search".to_owned(),
-        description: "Search the latest local DbGraph snapshot for database objects by keyword. Supports optional object kind filtering such as table, column, view, foreign_key, index, or sql_artifact.".to_owned(),
+        description: "Search local snapshot names and metadata with OR lexical matching and optional kind/schema/name filters. Returns snapshot identity, term diagnostics, coverage counts, and concrete follow-ups; no match does not prove concept absence. Live database state is not checked.".to_owned(),
         input_schema: json!({
             "type": "object",
             "required": ["query"],
@@ -199,7 +199,7 @@ fn table_tool() -> ToolDefinition {
 fn context_tool() -> ToolDefinition {
     ToolDefinition {
         name: "dbgraph_context".to_owned(),
-        description: "Build compact read-only database context for an AI task. Pass the user's task text directly as query; DbGraph will return relevant objects, relation paths, risks, and suggested next tools without executing SQL.".to_owned(),
+        description: "Build budgeted read-only context with snapshot provenance, lexical search diagnostics, one-hop graph neighbors, omissions, and concrete follow-ups. Filters constrain seeds only. Suggestions read latest at call time; live database state is not checked. SQL is never executed.".to_owned(),
         input_schema: json!({
             "type": "object",
             "required": ["query"],
@@ -499,13 +499,6 @@ struct StatusReport {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SearchReport {
-    query: String,
-    results: Vec<SearchResult>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct TableReport {
     table: String,
     columns: Vec<ColumnReport>,
@@ -730,10 +723,12 @@ fn search_project(arguments: &Value) -> Result<Value> {
     require_graph_index(&context)?;
     let snapshot = latest_snapshot(&context)?;
     let query = kind.map_or_else(|| query.to_owned(), |kind| format!("kind:{kind} {query}"));
-    to_value(SearchReport {
-        results: search_snapshot(&snapshot, &query, &SearchOptions { limit }),
-        query,
-    })
+    to_value(search_snapshot(
+        &snapshot,
+        &query,
+        &SearchOptions { limit },
+        context.project_root(),
+    ))
 }
 
 fn table_project(arguments: &Value) -> Result<Value> {
@@ -778,6 +773,7 @@ fn context_project(arguments: &Value) -> Result<Value> {
             token_budget,
             max_objects,
         },
+        context.project_root(),
     )?;
     to_value(package)
 }
@@ -1274,7 +1270,7 @@ fn initialize_result() -> Value {
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": { "tools": {} },
         "serverInfo": server_info(),
-        "instructions": "DbGraph is local-first and read-only by default. This MCP skeleton only exposes server metadata and an empty tool registry."
+        "instructions": "DbGraph queries local snapshots without executing SQL. Search/context report capture identity and lexical coverage; live database state is not checked. Follow-up calls read the latest snapshot at call time."
     })
 }
 
@@ -1524,7 +1520,7 @@ mod tests {
                     "arguments": {
                         "projectPath": temp.root,
                         "query": "refund payment order",
-                        "tokenBudget": 500,
+                        "tokenBudget": 800,
                         "mode": "compact"
                     }
                 }
@@ -1555,14 +1551,27 @@ mod tests {
             .expect("objects")
             .iter()
             .any(|object| object["fullName"] == "public.payments"));
-        assert!(context["suggestedNextTools"]
+        assert!(!context["suggestedNextTools"]
             .as_array()
             .expect("suggested next tools")
-            .iter()
-            .any(|tool| tool
-                .as_str()
-                .is_some_and(|tool| tool.contains("dbgraph table"))));
-        assert!(context["estimatedTokens"].as_u64().expect("tokens") <= 500);
+            .is_empty());
+        for suggestion in context["suggestedNextTools"]
+            .as_array()
+            .expect("suggestions")
+        {
+            let result = ToolRegistry::execute_call(&json!({
+                "name": suggestion["tool"],
+                "arguments": suggestion["arguments"],
+            }));
+            assert_ne!(
+                result["isError"], true,
+                "concrete follow-up should be callable"
+            );
+        }
+        assert_eq!(context["snapshot"]["id"], snapshot.id);
+        assert_eq!(context["snapshot"]["liveState"], "not_checked");
+        assert_eq!(context["diagnostics"]["matchMode"], "lexical_or");
+        assert!(context["estimatedTokens"].as_u64().expect("tokens") <= 800);
         assert_eq!(relations["target"], "public.orders");
         assert!(relations["paths"]
             .as_array()

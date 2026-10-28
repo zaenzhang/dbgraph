@@ -11,9 +11,10 @@ use dbgraph_core::project::ProjectContext;
 use dbgraph_core::snapshot::SnapshotStore;
 use dbgraph_core::{DbGraphError, Result};
 use dbgraph_graph::context::{ContextBuilder, ContextOptions, ContextPackage, RankingWeights};
+use dbgraph_graph::evidence::{SnapshotProvenance, ToolSuggestion};
 use dbgraph_graph::impact::{ImpactAnalyzer, ImpactOptions, ImpactReport};
 use dbgraph_graph::relations::{relations_for, Direction, RelationsOptions, RelationsReport};
-use dbgraph_graph::search::{search_snapshot, SearchOptions, SearchResult};
+use dbgraph_graph::search::{search_snapshot, SearchDiagnostics, SearchOptions, SearchReport};
 use dbgraph_sql::{analyze_sql_with_snapshot, SqlDialect, SqlParser};
 use dbgraph_storage::GraphRepository;
 use serde::Serialize;
@@ -213,13 +214,6 @@ pub(crate) fn print_validate_sql_report(report: &ValidateSqlReport) {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SearchReport {
-    pub(crate) query: String,
-    pub(crate) results: Vec<SearchResult>,
-}
-
 pub(crate) fn search_project(
     start: impl AsRef<Path>,
     query: &str,
@@ -229,19 +223,68 @@ pub(crate) fn search_project(
     require_graph_index(&context)?;
     let snapshot = latest_snapshot(&context)?;
     let query = kind.map_or_else(|| query.to_owned(), |kind| format!("kind:{kind} {query}"));
-    Ok(SearchReport {
-        results: search_snapshot(&snapshot, &query, &SearchOptions::default()),
-        query,
-    })
+    Ok(search_snapshot(
+        &snapshot,
+        &query,
+        &SearchOptions::default(),
+        context.project_root(),
+    ))
 }
 
 pub(crate) fn print_search_report(report: &SearchReport) {
     println!("DbGraph search: {}", report.query);
+    print_retrieval_evidence(&report.snapshot, &report.diagnostics);
     for result in &report.results {
         println!(
             "- {} {} :: {}",
             result.kind, result.full_name, result.summary
         );
+        if let Some(source) = &result.source_path {
+            println!("  Source: {source}");
+        }
+    }
+    print_suggestions(&report.suggested_next_tools);
+}
+
+fn print_retrieval_evidence(snapshot: &SnapshotProvenance, diagnostics: &SearchDiagnostics) {
+    println!(
+        "Snapshot: {} ({} / {}, captured Unix ms {}; live state: {})",
+        snapshot.id,
+        snapshot.provider,
+        snapshot.database_name,
+        snapshot.created_at_unix_ms,
+        snapshot.live_state,
+    );
+    let coverage = &diagnostics.coverage;
+    println!(
+        "Search: {} (OR lexical matching); {} snapshot objects, {} filter candidates, {} matches, {} returned, {} omitted by limit",
+        diagnostics.status, coverage.snapshot_objects, coverage.candidate_objects,
+        coverage.matched_objects, coverage.returned_objects, coverage.omitted_by_limit,
+    );
+    println!(
+        "Filters: kinds={}; schemas={}; names={}",
+        diagnostics.filters.kinds.join(", "),
+        diagnostics.filters.schema_filters.join(", "),
+        diagnostics.filters.name_filters.join(", "),
+    );
+    println!(
+        "Matched terms: {}; unmatched: {}; unchecked: {}",
+        diagnostics.matched_terms.join(", "),
+        diagnostics.unmatched_terms.join(", "),
+        diagnostics.unchecked_terms.join(", "),
+    );
+    println!("Coverage is limited to local snapshot names and metadata; no matches do not prove a business concept is absent.");
+}
+
+fn print_suggestions(suggestions: &[ToolSuggestion]) {
+    if !suggestions.is_empty() {
+        println!("Suggested next tools (read latest at call time):");
+        for suggestion in suggestions {
+            println!(
+                "- {} {} ({})",
+                suggestion.tool, suggestion.arguments, suggestion.reason
+            );
+        }
     }
 }
 
@@ -440,6 +483,7 @@ pub(crate) fn context_project(
             token_budget,
             max_objects: 12,
         },
+        context.project_root(),
     )
 }
 
@@ -447,13 +491,26 @@ pub(crate) fn print_context_report(report: &ContextPackage) {
     println!("## DbGraph Context");
     println!();
     println!("Query: {}", report.query);
+    print_retrieval_evidence(&report.snapshot, &report.diagnostics);
+    println!("Context: {} seeds, {} one-hop neighbors; filters apply to seeds only. Omitted: {} objects by limit, {} by budget, {} relations, {} suggestions.",
+        report.coverage.seed_objects, report.coverage.neighbor_objects,
+        report.coverage.omitted_by_limit, report.coverage.omitted_by_budget,
+        report.coverage.omitted_relations, report.coverage.omitted_suggestions,
+    );
     println!();
     println!("Relevant objects:");
     for object in &report.objects {
-        println!(
-            "- {} {} :: {}",
-            object.kind, object.full_name, object.summary
-        );
+        if object.summary.is_empty() {
+            println!("- {} {} [{}]", object.kind, object.full_name, object.origin);
+        } else {
+            println!(
+                "- {} {} [{}] :: {}",
+                object.kind, object.full_name, object.origin, object.summary
+            );
+        }
+        if let Some(source) = &object.source_path {
+            println!("  Source: {source}");
+        }
     }
     if !report.relation_paths.is_empty() {
         println!();
@@ -468,10 +525,7 @@ pub(crate) fn print_context_report(report: &ContextPackage) {
         println!("- {risk}");
     }
     println!();
-    println!("Suggested next tools:");
-    for tool in &report.suggested_next_tools {
-        println!("- {tool}");
-    }
+    print_suggestions(&report.suggested_next_tools);
 }
 
 pub(crate) fn diff_project(start: impl AsRef<Path>) -> Result<SchemaDiff> {

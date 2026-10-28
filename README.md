@@ -172,10 +172,17 @@ for validation limits and missing-index recovery.
 | `dbgraph diff` | Compare the latest snapshot with the previous snapshot. |
 | `dbgraph impact` | Report direct and indirect affected objects plus risk notes. |
 
-Search preserves Unicode terms and short identifiers. Context budgets cover the
-complete JSON, including semantic metadata; `estimatedTokens` is a coarse size
-estimate. An insufficient budget returns an explicit error. Diff requires two
-published snapshots and reports a missing baseline when there is only one.
+Search/context identify their source snapshot and capture time, report lexical
+term evidence and coverage counts, and provide concrete follow-up calls. A
+snapshot timestamp does not verify current database state, and no lexical match
+does not prove a business concept absent. Search preserves Unicode terms and
+short identifiers; context labels one-hop graph neighbors separately from seeds.
+Context budgets cover the complete pretty JSON, including provenance, diagnostics,
+semantic metadata, suggestions, and omission counts; `estimatedTokens` is the
+UTF-8 byte length divided by four, rounded up. An insufficient budget returns an
+explicit error. See the [usage guide](docs/usage.md#daily-cli-commands) for the
+shared response contract. Diff requires two published snapshots and reports a
+missing baseline when there is only one.
 
 ### Analysis Reports
 
@@ -343,7 +350,16 @@ dbgraph serve --mcp
 | `dbgraph_diff` | Compare latest and previous snapshots. |
 | `dbgraph_validate_sql` | Validate SQL references without executing SQL. |
 
-MCP responses are JSON text content. Large responses include response budget metadata and suggested follow-up tools.
+MCP responses are JSON text content. Detail tools can include response budget
+metadata; search/context report their own coverage and omission counts.
+
+Search/context return at most two `suggestedNextTools` entries containing
+`tool`, concrete `arguments` (including `projectPath`), and `reason`. Pass the
+tool and arguments to the next MCP call to expand a real table/object or validate
+captured SQL. Context may offer evidence omitted from its object list by the
+budget. Follow-ups read the latest snapshot when called; they are not pinned to
+the previous result. See the [English](docs/usage.md#mcp-server) or
+[中文](docs/usage.zh-CN.md#mcp-server) guide for a callable example and limits.
 
 `mcp.maxResponseChars` limits tool-result text to the configured Unicode character
 count (minimum `64`). Oversized results return `response_budget_exceeded` rather
@@ -400,8 +416,9 @@ DbGraph is inspired by the developer experience of [CodeGraph](https://github.co
 
 ## Roadmap
 
-- Current repair scope: SQL validation and write-safety analysis, SQL source identity, snapshot publication/recovery, Unicode search, response budgets, and the six-platform release matrix.
-- Deferred: external project features and issue suggestions, richer traceability, new benchmarks, and provider expansion.
+- The v0.1.4 repair baseline covers SQL validation and write-safety analysis, SQL source identity, snapshot publication/recovery, Unicode search, response budgets, and the six-platform release matrix.
+- This source follow-up adds snapshot provenance, lexical diagnostics, coverage, and callable evidence-backed suggestions; it has not been released or deployed.
+- Deferred: other external project features and issue suggestions, broader benchmarks, and provider expansion.
 - Future work should measure task correctness, tool calls, response size, and actual search/context latency before adding infrastructure.
 
-See the [repair plan and verification status](docs/bug-fix-plan.md), [current roadmap](docs/roadmap.md), and [AI efficiency review](docs/ai-efficiency-review.md). The review separates our own bugs, implemented strengths of other projects, and pain points or proposals from their issues. External ideas remain outside this repair release.
+See the [context evidence plan and verification status](docs/context-evidence-plan.md), [v0.1.4 repair plan](docs/bug-fix-plan.md), [current roadmap](docs/roadmap.md), and [AI efficiency review](docs/ai-efficiency-review.md). The review separates our own bugs, implemented strengths of other projects, and pain points or proposals from their issues. The context follow-up is a bounded source change separate from the v0.1.4 release.

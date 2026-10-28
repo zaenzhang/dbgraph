@@ -131,6 +131,7 @@ pub(crate) fn benchmark_agent_project(
                     token_budget: 1_200,
                     max_objects: 12,
                 },
+                context.project_root(),
             )?;
             let context_json = serde_json::to_string(&context_package).map_err(|source| {
                 DbGraphError::Internal {

@@ -10,6 +10,7 @@ use dbgraph_storage::GraphRepository;
 
 pub mod analysis;
 pub mod context;
+pub mod evidence;
 pub mod impact;
 pub mod relations;
 pub mod search;

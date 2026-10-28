@@ -270,6 +270,10 @@ dbgraph search email --kind column --json
 
 检索会保留 Unicode 词项和短标识符。中文可以匹配对象名或语义描述，但不进行自动翻译；非空查询没有匹配时返回空结果，不会退化为全对象列表。仅使用对象类型等过滤器的明确查询仍可列举对象。
 
+CLI 和 MCP 使用同一份 search 报告。`snapshot` 返回 `id`、`provider`、`databaseName`、`createdAtUnixMs`；`liveState: "not_checked"` 表示本次查询没有检查实时数据库，采集时间不能证明当前数据库未变化。SQL 对象的 `sourcePath` 复用已有 metadata 中的来源路径。
+
+`diagnostics.matchMode: "lexical_or"` 表示任一提取词项都可以命中对象名、完整名称或 metadata。`matchedTerms` 和 `unmatchedTerms` 汇总过滤后全部候选的词法证据，包含被结果限额省略的匹配；没有候选可检查时，词项归入 `uncheckedTerms`。空词项列表不输出。`status` 区分 `matched`、`empty_snapshot`、`no_search_terms`、`no_candidates`、`no_term_match`。部分词项命中不代表整个问题已回答，无匹配也不能证明该业务概念不存在。`filters` 记录 kind/schema/name 条件，`diagnostics.coverage` 记录快照对象、候选、匹配、返回对象数量和 `omittedByLimit`。查询不会自动放宽过滤或改写重试。
+
 查看表结构：
 
 ```powershell
@@ -291,7 +295,9 @@ dbgraph context "refund payment order" --tokens 800
 dbgraph context "which tables are touched by order status changes" --json
 ```
 
-`--tokens` 约束完整、格式化后的 context JSON，包括 semantic、关系、建议和格式开销。`estimatedTokens` 按 UTF-8 字节数除以 4 后向上取整，只是粗估，不是模型 tokenizer 或计费值。超出预算的对象会被整项省略；预算连响应结构或一个相关对象都容纳不了时明确报错，不截断 JSON。需要更多细节时，可提高预算或缩小查询范围。
+Context 复用上述词法诊断作为种子检索说明，再展开一跳关系。对象保留快照内 `id`，`origin` 区分 `lexical_match`、`filter_match`、`graph_neighbor`。过滤只约束种子；关系邻居不一定命中词项或过滤条件。Context 的 `coverage` 记录 `seedObjects`、`neighborObjects`，以及 `omittedByLimit`、`omittedByBudget`、`omittedRelations`、`omittedSuggestions`。关系省略数只统计返回对象之间的边，不代表全快照所有关系。
+
+`--tokens` 约束完整、格式化后的 context JSON，包括出处、诊断、semantic、关系、具体建议、省略计数和格式开销。`estimatedTokens` 按 UTF-8 字节数除以 4 后向上取整，只是粗估，不是模型 tokenizer 或计费值。超出预算的对象会被整项省略；预算连响应结构或一个相关对象都容纳不了时明确报错，不截断 JSON。需要更多细节时，可提高预算或缩小查询范围。
 
 校验 SQL，但不执行 SQL：
 
@@ -402,7 +408,19 @@ dbgraph serve --mcp
 - `dbgraph_diff`
 - `dbgraph_validate_sql`
 
-MCP 响应是 JSON text content。较大的响应会包含 `responseBudget` 元数据和建议的后续调用。
+MCP 响应是 JSON text content。部分详情工具限制集合时会附带 `responseBudget` 元数据；search/context 使用上文说明的覆盖计数。
+
+Search/context 的 `suggestedNextTools` 最多包含两条 `{tool, arguments, reason}`。把 `tool` 作为下一次 `tools/call.name`，原样复制 `arguments` 即可；其中的 `projectPath` 保留本次项目作用域，不依赖 server 当前目录。例如，定位到 `C:/work/shop` 项目的 `public.orders` 后，可能返回：
+
+```json
+{
+  "tool": "dbgraph_table",
+  "arguments": {"projectPath": "C:/work/shop", "table": "public.orders"},
+  "reason": "inspect_snapshot_table"
+}
+```
+
+对应 CLI 为 `dbgraph table C:/work/shop public.orders --json`；继续获取任务上下文可运行 `dbgraph context C:/work/shop "orders status" --tokens 1600 --json`。其他建议使用 `dbgraph_relations` 加真实对象 ID，或将 snapshot 已有的 `normalizedSql` 和明确方言传给 `dbgraph_validate_sql`，不会生成或执行业务 SQL；对应 CLI 是 `dbgraph relations` 和 `dbgraph validate-sql`。没有候选时不编造建议。Context 中真实种子即使因预算没有出现在最终 `objects`，仍可能有补查建议。后续工具读取各自执行时的 latest；若期间重新采集，应比较报告中的 snapshot ID。
 
 `mcp.maxResponseChars` 限制工具结果文本的 Unicode 字符总数，最小为 `64`；不包含 JSON-RPC 包装和传输转义开销。剩余结果仍超限时，工具返回 `isError: true`，JSON 中的错误类型为 `response_budget_exceeded`，不会输出破损 JSON。应提高项目配置中的上限或减少请求细节。
 

@@ -2,7 +2,7 @@
 
 日期：2026-10-21（Europe/Budapest）。源码基线：`3c6a730`，workspace 版本 `0.1.2`。
 
-状态：**A 类 F01–F10 已完成修复与验收，v0.1.4 已发布、官网已更新**。下文保留修复前的复现证据；B/C/I 类建议未实施。发布结果见 [修复计划](bug-fix-plan.md) 和 [v0.1.4 说明](releases/v0.1.4.md)。
+状态：**A 类 F01–F10 已完成修复与验收，v0.1.4 已发布、官网已更新**。2026-10-28 新授权的 I03/C02 上下文切片已完成源码实现与验收，尚未发布或部署；其余 B/C/I 候选继续暂缓。下文保留原始发现，最新结果见 [上下文计划与验收](context-evidence-plan.md)；原发布结果见 [修复计划](bug-fix-plan.md) 和 [v0.1.4 说明](releases/v0.1.4.md)。
 
 ## 判断标准与验证范围
 
@@ -196,7 +196,7 @@ set status = (select email from customers where id = 1);
 
 ### I02 — 测量后使用已有索引优化
 
-SQLite storage 已有 FTS；CLI/MCP 主要 search/context 仍读取完整 JSON，调用 search_snapshot。context 邻居扩展还会反复线性查找对象 ID。不能写成“尚无 FTS”。
+SQLite storage 已有 FTS；CLI/MCP 主要 search/context 仍读取完整 JSON，调用 search_snapshot。2026-10-21 的 context 邻居扩展会反复线性查找对象 ID；2026-10-28 的本切片改为每请求对象/邻接映射，未切换 FTS。不能写成“尚无 FTS”，也不能据此宣称大规模检索已优化完成。
 
 `benchmark` 目前生成 synthetic schema 并报告对象/边数与 hash，没有测建图/search/context 耗时。10k 对象测试通过不等于交互延迟达标。
 
@@ -204,11 +204,13 @@ SQLite storage 已有 FTS；CLI/MCP 主要 search/context 仍读取完整 JSON�
 
 ### I03 — 可追溯且能继续查询的上下文
 
-context 已有对象、semantic、路径和建议，但缺少随内容返回的 snapshot 标识、采集时间、匹配依据与覆盖缺口。SQL sourcePath 已在 metadata，优先复用，不建平行出处账本。
+原缺口（2026-10-21）：context 已有对象、semantic、路径和建议，但缺少随内容返回的 snapshot 标识、采集时间、匹配依据与覆盖缺口。SQL sourcePath 已在 metadata，优先复用，不建平行出处账本。
 
 首屏给足任务相关对象/必要关系/出处，大枚举和详细 profile 按需查。可报告快照年龄；未连接实时数据库时，不能声称实时 schema 已确认未变。
 
 用 I01 验收：减少补查而关键证据召回不降；无匹配、未覆盖、预算省略、旧快照各有明确表达。
+
+2026-10-28 有界实施结果：graph 统一出处、诊断、覆盖与结构化建议，CLI/MCP 复用；词项未匹配与未检查分开。具体建议已在服务 cwd 之外的隔离项目原样调用，完成表展开、上下文和已有 SQL 校验。默认 800-token 预算下，出处和诊断占用空间，返回细节少于旧版；省略显式计数，保留关键表及退款外键路径，可按建议补查。正常单表 search 实测新增约 885 字节 / 221 粗估 token。不能据此宣称调用数、模型费用或全量证据召回改善，详见 [测量与边界](performance.md) 和 [全部冒烟发现](context-evidence-plan.md)。原 `benchmark-agent` 未重做，仍不能用于证明本次端到端收益。
 
 ### I04 — 交付检查与平台文档
 
